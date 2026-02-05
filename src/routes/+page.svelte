@@ -1,14 +1,16 @@
 <script>
 	import { RealtimeAgent, RealtimeSession } from '@openai/agents-realtime';
 
+	const VOICE_LABELS = { sage: 'Rachel', echo: 'Sh', verse: 'Verse', marin: 'Marin', alloy: 'Alloy', ash: 'Ash', ballad: 'Ballad', coral: 'Coral', shimmer: 'Shimmer', cedar: 'Cedar' };
 	let status = $state('idle');
 	let error = $state(null);
 	let session = $state(null);
+	let currentCharacterName = $state('AI Tutor');
 	let conversationLog = $state([]);
 	let logContainer = $state(null);
 	let textInput = $state('');
-	let inputMode = $state('voice'); // 'voice' | 'text'
-	let micOn = $state(true); // voice 모드에서 마이크 on/off
+	let inputMode = $state('voice');
+	let micOn = $state(true);
 
 	function getMessageText(item) {
 		if (item.type !== 'message' || !item.content) return null;
@@ -51,7 +53,8 @@
 			const data = await res.json();
 
 			if (!res.ok) {
-				const msg = data.details ? `${data.error || 'Failed to get token'}: ${data.details}` : (data.error || data.details || 'Failed to get token.');
+				let msg = data.details ? `${data.error || 'Failed to get token'}: ${data.details}` : (data.error || data.details || 'Failed to get token.');
+				if (data.hint) msg += ` ${data.hint}`;
 				throw new Error(msg);
 			}
 
@@ -67,12 +70,25 @@
 
 			const realtimeSession = new RealtimeSession(agent);
 			realtimeSession.on('history_updated', (history) => updateConversationLog(history));
+			realtimeSession.on('error', (e) => {
+				error = e?.error?.message ?? String(e?.error ?? e);
+				status = 'error';
+				session = null;
+			});
+			realtimeSession.transport?.on?.('connection_change', (connStatus) => {
+				if (connStatus === 'disconnected') {
+					error = 'Connection lost. Please start a new conversation.';
+					status = 'error';
+					session = null;
+				}
+			});
 			await realtimeSession.connect({ apiKey: ephemeralKey });
 
 			session = realtimeSession;
+			currentCharacterName = VOICE_LABELS[voice] ?? 'AI Tutor';
 			status = 'connected';
 			inputMode = 'voice';
-			micOn = false; // 처음엔 마이크 꺼짐, Start mic 눌러야 활성화
+			micOn = false;
 			if (realtimeSession.muted !== null) realtimeSession.mute(true);
 		} catch (e) {
 			status = 'error';
@@ -91,11 +107,29 @@
 		error = null;
 	}
 
+	function safeSendMessage(msg) {
+		if (!session) return false;
+		const transport = session.transport;
+		if (transport?.status && transport.status !== 'connected') {
+			error = 'Connection lost. Please start a new conversation.';
+			status = 'error';
+			return false;
+		}
+		try {
+			session.sendMessage(msg);
+			return true;
+		} catch (e) {
+			error = e?.message ?? 'Failed to send message.';
+			status = 'error';
+			session = null;
+			return false;
+		}
+	}
+
 	function sendText() {
 		const text = textInput.trim();
 		if (!text || !session) return;
-		session.sendMessage(text);
-		textInput = '';
+		if (safeSendMessage(text)) textInput = '';
 	}
 
 	function setInputMode(mode) {
@@ -119,23 +153,27 @@
 	}
 
 	function requestGrammarCorrection() {
-		if (!session) return;
-		session.sendMessage(
+		safeSendMessage(
 			'Please correct the grammar and spelling in my previous message. Give me the corrected version and briefly explain any mistakes.'
 		);
 	}
 
 	function requestParaphrase() {
-		if (!session) return;
-		session.sendMessage(
+		safeSendMessage(
 			'Please paraphrase my previous message into more natural English. Give me a few alternative versions if possible.'
+		);
+	}
+
+	function requestRandomQuestion() {
+		safeSendMessage(
+			'Please ask me a random question to practice English conversation. Pick a fun, interesting topic (e.g. hobbies, travel, food, opinions, hypotheticals). Just ask the question directly—no grammar correction or paraphrase needed.'
 		);
 	}
 </script>
 
-<div class="min-h-screen bg-stone-50 flex">
+<div class="h-screen overflow-hidden bg-stone-50 flex">
 	<!-- Left: Controls + Input (Preply-style) -->
-	<aside class="w-full lg:w-[420px] lg:min-h-screen flex flex-col bg-white border-r border-stone-200 p-8 lg:p-10">
+	<aside class="w-full lg:w-[420px] h-screen flex flex-col bg-white border-r border-stone-200 p-8 lg:p-10 overflow-y-auto shrink-0">
 		<div class="flex-1">
 			<h1 class="text-2xl font-bold text-stone-900 tracking-tight mb-2">
 				Learn faster with your personal AI English tutor
@@ -183,6 +221,35 @@
 				<div class="flex flex-col items-center gap-4 py-12">
 					<div class="w-10 h-10 border-2 border-rose-500 border-t-transparent rounded-full animate-spin"></div>
 					<p class="text-stone-500 text-sm">Connecting...</p>
+				</div>
+			{:else if status === 'error'}
+				{@const errorVoiceOptions = [
+					{ id: 'sage', label: 'Rachel', btn: 'bg-violet-500 hover:bg-violet-600 shadow-violet-500/20' },
+					{ id: 'echo', label: 'Sh', btn: 'bg-sky-500 hover:bg-sky-600 shadow-sky-500/20' },
+					{ id: 'verse', label: 'Verse', btn: 'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/20' },
+					{ id: 'marin', label: 'Marin', btn: 'bg-teal-500 hover:bg-teal-600 shadow-teal-500/20' },
+					{ id: 'alloy', label: 'Alloy', btn: 'bg-slate-500 hover:bg-slate-600 shadow-slate-500/20' },
+					{ id: 'ash', label: 'Ash', btn: 'bg-stone-500 hover:bg-stone-600 shadow-stone-500/20' },
+					{ id: 'ballad', label: 'Ballad', btn: 'bg-amber-500 hover:bg-amber-600 shadow-amber-500/20' },
+					{ id: 'coral', label: 'Coral', btn: 'bg-rose-500 hover:bg-rose-600 shadow-rose-500/20' },
+					{ id: 'shimmer', label: 'Shimmer', btn: 'bg-fuchsia-500 hover:bg-fuchsia-600 shadow-fuchsia-500/20' },
+					{ id: 'cedar', label: 'Cedar', btn: 'bg-lime-600 hover:bg-lime-700 shadow-lime-500/20' }
+				]}
+				<div class="space-y-4">
+					<p class="text-stone-600 text-sm">Connection was lost or an error occurred. Choose a voice to start a new conversation.</p>
+					<div class="space-y-2 max-h-[280px] overflow-y-auto">
+						{#each errorVoiceOptions as { id, label, btn }}
+							<button
+								onclick={() => connect(id)}
+								class="w-full py-2.5 rounded-xl {btn} text-white font-medium text-sm transition-all flex items-center justify-center gap-2"
+							>
+								Let's start with {label}
+								<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+								</svg>
+							</button>
+						{/each}
+					</div>
 				</div>
 			{:else if status === 'connected'}
 				<div class="space-y-6">
@@ -259,9 +326,10 @@
 						</div>
 					{:else}
 						<div class="space-y-3">
-							<label class="block text-sm font-medium text-stone-600">Type your message</label>
+							<label for="text-input" class="block text-sm font-medium text-stone-600">Type your message</label>
 							<div class="flex gap-2">
 								<input
+									id="text-input"
 									type="text"
 									bind:value={textInput}
 									onkeydown={(e) => e.key === 'Enter' && !e.shiftKey && sendText()}
@@ -290,23 +358,34 @@
 		</div>
 	</aside>
 
-	<!-- Right: Conversation -->
-	<main class="flex-1 flex flex-col min-h-screen">
-		<div class="flex-1 flex flex-col p-6 lg:p-10">
-			<div class="flex-1 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden flex flex-col">
-				<div class="px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between gap-4 flex-wrap">
+	<!-- Right: Conversation (only this area scrolls) -->
+	<main class="flex-1 flex flex-col min-h-0 overflow-hidden">
+		<div class="flex-1 flex flex-col min-h-0 p-6 lg:p-10">
+			<div class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden">
+				<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between gap-4 flex-wrap">
 					<h2 class="text-sm font-semibold text-stone-700">Conversation</h2>
-					{#if status === 'connected' && hasUserMessage()}
-						<div class="flex gap-2">
+					{#if status === 'connected'}
+						<div class="flex gap-2 flex-wrap">
+							<button
+								onclick={requestRandomQuestion}
+								title="AI will ask you a random question"
+								class="px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 text-xs font-medium transition-colors"
+							>
+								🥳
+							</button>
 							<button
 								onclick={requestGrammarCorrection}
-								class="px-3 py-1.5 rounded-lg border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 text-xs font-medium transition-colors"
+								disabled={!hasUserMessage()}
+								title={hasUserMessage() ? 'Correct grammar of your last message' : 'Send a message first'}
+								class="px-3 py-1.5 rounded-lg border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium transition-colors"
 							>
 								Adjust grammar
 							</button>
 							<button
 								onclick={requestParaphrase}
-								class="px-3 py-1.5 rounded-lg border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 text-xs font-medium transition-colors"
+								disabled={!hasUserMessage()}
+								title={hasUserMessage() ? 'Paraphrase your last message' : 'Send a message first'}
+								class="px-3 py-1.5 rounded-lg border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium transition-colors"
 							>
 								Paraphrase
 							</button>
@@ -315,7 +394,7 @@
 				</div>
 				<div
 					bind:this={logContainer}
-					class="flex-1 min-h-[300px] overflow-y-auto p-6 space-y-4"
+					class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-6 space-y-4"
 					role="log"
 					aria-label="Conversation history"
 				>
@@ -339,7 +418,7 @@
 										: 'bg-stone-50 text-stone-800 border border-stone-100'}"
 								>
 									<span class="text-xs font-medium text-stone-600 block mb-1.5">
-										{role === 'user' ? 'You' : 'AI Tutor'}
+										{role === 'user' ? 'You' : currentCharacterName}
 									</span>
 									<p class="whitespace-pre-wrap break-words leading-relaxed">{text}</p>
 								</div>

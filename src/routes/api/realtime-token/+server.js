@@ -70,8 +70,18 @@ Speak clearly at a moderate pace. Use B1-B2 vocabulary. Be encouraging.`
 			headers: { 'Content-Type': 'application/json' }
 		});
 	} catch (e) {
+		const msg = e?.message ?? 'Unknown error';
+		const cause = e?.cause?.message ?? e?.cause;
+		const isNetworkError = msg === 'fetch failed' || msg?.includes('timeout') || msg?.includes('Timeout');
+		const hint = isNetworkError
+			? 'Cannot reach api.openai.com. Check: 1) Internet connection 2) Firewall/VPN blocking OpenAI 3) Try different network 4) Slow network - try again.'
+			: null;
 		return new Response(
-			JSON.stringify({ error: 'Server error', details: e?.message }),
+			JSON.stringify({
+				error: 'Server error',
+				details: cause ? `${msg} (${cause})` : msg,
+				hint
+			}),
 			{ status: 500, headers: { 'Content-Type': 'application/json' } }
 		);
 	}

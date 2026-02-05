@@ -1,42 +1,34 @@
-# sv
+# My Speaking AI
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+목소리 녹음 및 AI 영어 회화 연습을 위한 SvelteKit 앱입니다.
 
-## Creating a project
+## 기능
 
-If you're seeing this, you've probably already done this step. Congrats!
+- **AI 영어 회화 선생님** (`/`): OpenAI Realtime API 기반 음성 대화 + 대화 기록
 
-```sh
-# create a new project
-npx sv create my-app
+## AI 영어 회화 선생님 설정
+
+1. [OpenAI Platform](https://platform.openai.com/api-keys)에서 API 키 발급
+2. 프로젝트 루트에 `.env` 파일 생성:
+
+```
+OPENAI_API_KEY=sk-proj-xxxxx
 ```
 
-To recreate this project with the same configuration:
+3. `.env.example`을 참고하여 설정
+
+## 개발
 
 ```sh
-# recreate this project
-npx sv create --template minimal --no-types --add eslint vitest="usages:unit,component" tailwindcss="plugins:none" sveltekit-adapter="adapter:auto" --install npm my-speaking-ai
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
+npm install
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
 
-## Building
+`http://localhost:5173`에서 확인
 
-To create a production version of your app:
+## 빌드
 
 ```sh
 npm run build
+npm run preview
 ```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.

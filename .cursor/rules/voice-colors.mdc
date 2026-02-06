@@ -1,0 +1,36 @@
+---
+description: Voice character color scheme for buttons
+globs: src/routes/+page.svelte
+alwaysApply: false
+---
+
+# Voice Character Color Scheme
+
+Each voice character has a distinct color. Use these consistently:
+
+| Character | Color | Tailwind Classes |
+|-----------|-------|------------------|
+| Rachel | Pink | `bg-pink-400 hover:bg-pink-500` |
+| Sh | Teal | `bg-teal-400 hover:bg-teal-500` |
+| Arnold | Emerald | `bg-emerald-400 hover:bg-emerald-500` |
+| Marin | Violet | `bg-violet-400 hover:bg-violet-500` |
+| Alloy | Amber | `bg-amber-400 hover:bg-amber-500` |
+| Ash | Stone | `bg-stone-400 hover:bg-stone-500` |
+| Ballad | Sky | `bg-sky-400 hover:bg-sky-500` |
+| Coral | Coral | `bg-coral hover:bg-[#e07360]` (custom) |
+| Shimmer | Fuchsia | `bg-fuchsia-400 hover:bg-fuchsia-500` |
+| Cedar | Green | `bg-green-600 hover:bg-green-700` |
+
+## Custom Color
+
+Coral is defined in `layout.css`:
+
+```css
+@theme {
+  --color-coral: #eb8374;
+}
+```
+
+## Usage
+
+Use the same colors in both `voiceOptions` and `errorVoiceOptions` arrays.

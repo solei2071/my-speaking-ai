@@ -249,25 +249,64 @@
 		}
 	}
 
+	let disconnectMessage = $state('');
+
 	function disconnect() {
+		console.log('[API] Disconnecting...');
+		
+		// Stop speech recognition
 		stopListening();
+		
+		// Clear timers
 		if (autoSendTimer) {
 			clearTimeout(autoSendTimer);
 			autoSendTimer = null;
 		}
+		
+		// Reset states
 		liveTranscript = '';
 		finalTranscript = '';
 		isSpeaking = false;
 		streamingText = '';
 		streamingMessageId = null;
+		
+		// Close session and WebSocket
 		if (session) {
 			try {
+				// Try to close WebSocket directly
+				const transport = session.transport;
+				const ws = transport?.ws || transport?.socket || transport?._ws || transport?.websocket;
+				if (ws) {
+					console.log('[API] WebSocket state before close:', ws.readyState);
+					// 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+					if (ws.readyState === 1) { // OPEN
+						ws.close(1000, 'User disconnected');
+						console.log('[API] WebSocket close() called');
+					}
+				}
+				
+				// Close session
 				session.close();
-			} catch (_) {}
+				console.log('[API] Session close() called');
+			} catch (e) {
+				console.log('[API] Error during disconnect:', e);
+			}
 			session = null;
 		}
-		status = 'idle';
-		error = null;
+		
+		// Show disconnection confirmation
+		status = 'disconnected';
+		disconnectMessage = 'Connection closed. No more API calls.';
+		console.log('[API] Disconnected successfully');
+		
+		// After 2 seconds, go back to idle
+		setTimeout(() => {
+			if (status === 'disconnected') {
+				status = 'idle';
+				disconnectMessage = '';
+				error = null;
+			}
+		}, 2000);
 	}
 
 	function safeSendMessage(msg) {
@@ -543,6 +582,18 @@
 					<div class="w-10 h-10 border-2 border-rose-500 border-t-transparent rounded-full animate-spin"></div>
 					<p class="text-stone-500 text-sm">Connecting...</p>
 				</div>
+			{:else if status === 'disconnected'}
+				<div class="flex flex-col items-center gap-4 py-12">
+					<div class="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
+						<svg class="w-8 h-8 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+						</svg>
+					</div>
+					<div class="text-center">
+						<p class="text-emerald-700 font-medium text-sm">Disconnected</p>
+						<p class="text-stone-500 text-xs mt-1">{disconnectMessage}</p>
+					</div>
+				</div>
 			{:else if status === 'error'}
 				{@const errorVoiceOptions = [
 					{ id: 'sage', label: 'Rachel', btn: 'bg-pink-400 hover:bg-pink-500 shadow-pink-400/20' },
@@ -574,10 +625,6 @@
 				</div>
 			{:else if status === 'connected'}
 				<div class="space-y-6">
-					<div class="flex items-center gap-2">
-						<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-						<span class="text-sm font-medium text-stone-700">In conversation</span>
-					</div>
 
 					<!-- Voice / Text mode toggle -->
 					<div class="flex rounded-xl bg-stone-100 p-1">
@@ -703,9 +750,13 @@
 
 					<button
 						onclick={disconnect}
-						class="w-full py-2.5 rounded-xl border border-stone-200 text-stone-600 hover:bg-stone-50 text-sm font-medium transition-colors"
+						class="w-full py-2.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-sm font-medium transition-colors flex items-center justify-center gap-2"
+						title="Closes API connection completely"
 					>
-						End conversation
+						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+						</svg>
+						End & disconnect
 					</button>
 				</div>
 			{/if}
@@ -717,7 +768,16 @@
 		<div class="flex-1 flex flex-col min-h-0 p-6 lg:p-10">
 			<div class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden">
 				<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between gap-4 flex-wrap">
-					<h2 class="text-sm font-semibold text-stone-700">Conversation</h2>
+					<div class="flex items-center gap-2">
+						<h2 class="text-sm font-semibold text-stone-700">Conversation</h2>
+						{#if status === 'connected'}
+							<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="API Connected"></span>
+						{:else if status === 'disconnected' || status === 'error'}
+							<span class="w-2 h-2 rounded-full bg-red-500" title="Disconnected"></span>
+						{:else}
+							<span class="w-2 h-2 rounded-full bg-stone-300" title="Not connected"></span>
+						{/if}
+					</div>
 					{#if status === 'connected'}
 						<div class="flex gap-2 flex-wrap">
 							<button

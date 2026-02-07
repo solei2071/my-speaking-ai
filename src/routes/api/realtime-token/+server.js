@@ -21,7 +21,7 @@ export async function POST({ request }) {
 	const sessionConfig = {
 		session: {
 			type: 'realtime',
-			model: 'gpt-realtime',
+			model: 'gpt-4o-mini-realtime-preview',
 			audio: {
 				output: { voice }
 			},

@@ -1,5 +1,6 @@
 <script>
 	import { RealtimeAgent, RealtimeSession } from '@openai/agents-realtime';
+	import { user, authLoading, signOut } from '$lib/auth.js';
 
 	const VOICE_LABELS = { sage: 'Rachel', echo: 'Sh', verse: 'Arnold', marin: 'Marin', alloy: 'Alloy', ash: 'Ash', ballad: 'Ballad', coral: 'Coral', shimmer: 'Shimmer', cedar: 'Cedar' };
 	let status = $state('idle');
@@ -535,6 +536,49 @@
 	<!-- Left: Controls + Input (Preply-style) -->
 	<aside class="w-full lg:w-[420px] h-screen flex flex-col bg-white border-r border-stone-200 p-8 lg:p-10 overflow-y-auto shrink-0">
 		<div class="flex-1">
+			<!-- User Auth Section -->
+			{#if $authLoading}
+				<div class="mb-6 flex items-center gap-2 text-stone-400 text-sm">
+					<div class="w-4 h-4 border-2 border-stone-300 border-t-transparent rounded-full animate-spin"></div>
+					Loading...
+				</div>
+			{:else if $user}
+				<div class="mb-6 flex items-center justify-between p-3 bg-stone-50 rounded-xl border border-stone-100">
+					<div class="flex items-center gap-3">
+						<div class="w-8 h-8 rounded-full bg-pink-100 flex items-center justify-center">
+							<span class="text-pink-600 text-sm font-medium">
+								{($user.user_metadata?.name || $user.email)?.[0]?.toUpperCase() || '?'}
+							</span>
+						</div>
+						<div class="text-sm">
+							<p class="font-medium text-stone-700">{$user.user_metadata?.name || 'User'}</p>
+							<p class="text-xs text-stone-400">{$user.email}</p>
+						</div>
+					</div>
+					<button
+						onclick={() => signOut()}
+						class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors"
+					>
+						Logout
+					</button>
+				</div>
+			{:else}
+				<div class="mb-6 flex gap-2">
+					<a
+						href="/login"
+						class="flex-1 py-2.5 text-center rounded-xl border border-stone-200 text-stone-600 hover:bg-stone-50 text-sm font-medium transition-colors"
+					>
+						Log in
+					</a>
+					<a
+						href="/signup"
+						class="flex-1 py-2.5 text-center rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-sm font-medium transition-colors"
+					>
+						Sign up
+					</a>
+				</div>
+			{/if}
+
 			<h1 class="text-2xl font-bold text-stone-900 tracking-tight mb-2">
 				Your personal English tutor
 			</h1>

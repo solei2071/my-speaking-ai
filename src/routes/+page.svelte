@@ -1,9 +1,11 @@
 <script>
 	import { RealtimeAgent, RealtimeSession } from '@openai/agents-realtime';
 	import { user, authLoading, signOut } from '$lib/auth.js';
+	import { saveMessage, fetchSessions, fetchSessionMessages } from '$lib/conversation.js';
 
-	const VOICE_LABELS = { sage: 'Rachel', echo: 'Sh', verse: 'Arnold', marin: 'Marin', alloy: 'Alloy', ash: 'Ash', ballad: 'Ballad', coral: 'Coral', shimmer: 'Shimmer', cedar: 'Cedar' };
+	const VOICE_LABELS = { sage: 'Rachel', echo: 'Sh', verse: 'Arnold', marin: 'Marin', alloy: 'Alloy', ash: 'Ash', ballad: 'Ballad', coral: 'Hannah', shimmer: 'Shimmer', cedar: 'Cedar' };
 	let status = $state('idle');
+	let currentSessionId = $state(null);
 	let error = $state(null);
 	let session = $state(null);
 	let currentCharacterName = $state('Tutor');
@@ -26,6 +28,13 @@
 
 	// Auto-send timer
 	let autoSendTimer = $state(null);
+
+	// History view
+	let historySessions = $state([]);
+	let historyView = $state(null);
+	let selectedSession = $state(null);
+	let historyMessages = $state([]);
+	let historyLoading = $state(false);
 
 	function handleServerEvent(event) {
 		if (!event?.type) return;
@@ -58,6 +67,7 @@
 			const lastMsg = conversationLog[conversationLog.length - 1];
 			if (lastMsg?.isStreaming && streamingText) {
 				conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: streamingText }];
+				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', streamingText);
 			}
 			streamingText = '';
 		}
@@ -125,14 +135,17 @@
 			if (lastMsg?.isStreaming) {
 				conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: latestCompletedText }];
 				isSpeaking = false;
+				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText);
 			}
 			// Or add if there's no assistant message yet
 			else if (lastMsg?.role === 'user') {
 				conversationLog = [...conversationLog, { role: 'assistant', text: latestCompletedText }];
+				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText);
 			}
 			// Or update if text changed
 			else if (lastMsg?.role === 'assistant' && lastMsg.text !== latestCompletedText) {
 				conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: latestCompletedText }];
+				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText);
 			}
 		}
 
@@ -145,6 +158,7 @@
 		status = 'connecting';
 		error = null;
 		conversationLog = [];
+		currentSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
 		try {
 			const res = await fetch('/api/realtime-token', {
@@ -185,6 +199,7 @@
 				const lastMsg = conversationLog[conversationLog.length - 1];
 				if (lastMsg?.isStreaming) {
 					conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: lastMsg.text }];
+					if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', lastMsg.text);
 				}
 			});
 			realtimeSession.transport?.on?.('connection_change', (connStatus) => {
@@ -295,6 +310,8 @@
 			session = null;
 		}
 		
+		currentSessionId = null;
+
 		// Show disconnection confirmation
 		status = 'disconnected';
 		disconnectMessage = 'Connection closed. No more API calls.';
@@ -338,6 +355,11 @@
 		requestAnimationFrame(() => {
 			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
 		});
+
+		// Save to DB
+		if ($user && currentSessionId) {
+			saveMessage($user.id, currentSessionId, currentCharacterName, 'user', text);
+		}
 
 		// Send to tutor
 		if (safeSendMessage(text)) textInput = '';
@@ -515,6 +537,11 @@
 			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
 		});
 
+		// Save to DB
+		if ($user && currentSessionId) {
+			saveMessage($user.id, currentSessionId, currentCharacterName, 'user', text);
+		}
+
 		// Send to tutor
 		safeSendMessage(text);
 
@@ -529,6 +556,35 @@
 	function clearTranscript() {
 		liveTranscript = '';
 		finalTranscript = '';
+	}
+
+	async function loadHistory() {
+		if (!$user) return;
+		historyLoading = true;
+		historyView = 'list';
+		historySessions = await fetchSessions($user.id);
+		historyLoading = false;
+	}
+
+	async function viewSession(sess) {
+		if (!$user) return;
+		historyLoading = true;
+		selectedSession = sess;
+		historyMessages = await fetchSessionMessages($user.id, sess.session_id);
+		historyView = 'detail';
+		historyLoading = false;
+	}
+
+	function backToHistoryList() {
+		selectedSession = null;
+		historyView = 'list';
+	}
+
+	function backToMain() {
+		historyView = null;
+		historySessions = [];
+		selectedSession = null;
+		historyMessages = [];
 	}
 </script>
 
@@ -555,12 +611,20 @@
 							<p class="text-xs text-stone-400">{$user.email}</p>
 						</div>
 					</div>
-					<button
-						onclick={() => signOut()}
-						class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors"
-					>
-						Logout
-					</button>
+					<div class="flex gap-2">
+						<button
+							onclick={() => historyView ? backToMain() : loadHistory()}
+							class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors"
+						>
+							{historyView ? '← Back' : 'History'}
+						</button>
+						<button
+							onclick={() => signOut()}
+							class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors"
+						>
+							Logout
+						</button>
+					</div>
 				</div>
 			{:else}
 				<div class="mb-6 flex gap-2">
@@ -601,7 +665,7 @@
 					{ id: 'alloy', label: 'Alloy', btn: 'bg-amber-400 hover:bg-amber-500 shadow-amber-400/20' },
 					{ id: 'ash', label: 'Ash', btn: 'bg-stone-400 hover:bg-stone-500 shadow-stone-400/20' },
 					{ id: 'ballad', label: 'Ballad', btn: 'bg-sky-400 hover:bg-sky-500 shadow-sky-400/20' },
-					{ id: 'coral', label: 'Coral', btn: 'bg-coral hover:bg-[#e07360] shadow-[#eb8374]/20' },
+					{ id: 'coral', label: 'Hannah', btn: 'bg-coral hover:bg-[#e07360] shadow-[#eb8374]/20' },
 					{ id: 'shimmer', label: 'Shimmer', btn: 'bg-fuchsia-400 hover:bg-fuchsia-500 shadow-fuchsia-400/20' },
 					{ id: 'cedar', label: 'Cedar', btn: 'bg-green-600 hover:bg-green-700 shadow-green-600/20' }
 				]}
@@ -647,7 +711,7 @@
 					{ id: 'alloy', label: 'Alloy', btn: 'bg-amber-400 hover:bg-amber-500 shadow-amber-400/20' },
 					{ id: 'ash', label: 'Ash', btn: 'bg-stone-400 hover:bg-stone-500 shadow-stone-400/20' },
 					{ id: 'ballad', label: 'Ballad', btn: 'bg-sky-400 hover:bg-sky-500 shadow-sky-400/20' },
-					{ id: 'coral', label: 'Coral', btn: 'bg-coral hover:bg-[#e07360] shadow-[#eb8374]/20' },
+					{ id: 'coral', label: 'Hannah', btn: 'bg-coral hover:bg-[#e07360] shadow-[#eb8374]/20' },
 					{ id: 'shimmer', label: 'Shimmer', btn: 'bg-fuchsia-400 hover:bg-fuchsia-500 shadow-fuchsia-400/20' },
 					{ id: 'cedar', label: 'Cedar', btn: 'bg-green-600 hover:bg-green-700 shadow-green-600/20' }
 				]}
@@ -807,9 +871,72 @@
 		</div>
 	</aside>
 
-	<!-- Right: Conversation (only this area scrolls) -->
+	<!-- Right: Conversation or History -->
 	<main class="flex-1 flex flex-col min-h-0 overflow-hidden">
 		<div class="flex-1 flex flex-col min-h-0 p-6 lg:p-10">
+			{#if historyView === 'list'}
+				<div class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden">
+					<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50">
+						<h2 class="text-sm font-semibold text-stone-700">Past Conversations</h2>
+					</div>
+					<div class="flex-1 min-h-0 overflow-y-auto p-6">
+						{#if historyLoading}
+							<div class="flex justify-center py-12">
+								<div class="w-8 h-8 border-2 border-pink-500 border-t-transparent rounded-full animate-spin"></div>
+							</div>
+						{:else if historySessions.length === 0}
+							<div class="text-center py-12 text-stone-500 text-sm">
+								<p>No conversations yet.</p>
+								<p class="mt-2">Start a conversation to see your history here.</p>
+							</div>
+						{:else}
+							<div class="space-y-2">
+								{#each historySessions as sess}
+									<button
+										onclick={() => viewSession(sess)}
+										class="w-full text-left p-4 rounded-xl border border-stone-200 hover:bg-stone-50 hover:border-stone-300 transition-colors"
+									>
+										<div class="flex justify-between items-start">
+											<div>
+												<span class="font-medium text-stone-700">{sess.character_name}</span>
+												<span class="text-stone-400 text-xs ml-2">{sess.message_count} messages</span>
+											</div>
+											<span class="text-xs text-stone-500">{new Date(sess.started_at).toLocaleString()}</span>
+										</div>
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				</div>
+			{:else if historyView === 'detail'}
+				<div class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden">
+					<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between">
+						<button onclick={backToHistoryList} class="text-sm text-stone-500 hover:text-stone-700 flex items-center gap-1">
+							<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+							Back
+						</button>
+						<h2 class="text-sm font-semibold text-stone-700">{selectedSession?.character_name} · {new Date(selectedSession?.started_at).toLocaleString()}</h2>
+						<div></div>
+					</div>
+					<div class="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
+						{#if historyLoading}
+							<div class="flex justify-center py-12">
+								<div class="w-8 h-8 border-2 border-pink-500 border-t-transparent rounded-full animate-spin"></div>
+							</div>
+						{:else}
+							{#each historyMessages as msg}
+								<div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'}">
+									<div class="max-w-[85%] rounded-2xl px-4 py-3 text-sm {msg.role === 'user' ? 'bg-rose-50 text-stone-900 border border-rose-100' : 'bg-stone-50 text-stone-800 border border-stone-100'}">
+										<span class="text-xs font-medium text-stone-600 block mb-1.5">{msg.role === 'user' ? 'You' : selectedSession?.character_name}</span>
+										<p class="whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
+									</div>
+								</div>
+							{/each}
+						{/if}
+					</div>
+				</div>
+			{:else}
 			<div class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden">
 				<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between gap-4 flex-wrap">
 					<div class="flex items-center gap-2">
@@ -894,6 +1021,7 @@
 					{/if}
 				</div>
 			</div>
+			{/if}
 		</div>
 	</main>
 </div>

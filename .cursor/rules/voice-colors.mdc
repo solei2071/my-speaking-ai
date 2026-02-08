@@ -17,13 +17,13 @@ Each voice character has a distinct color. Use these consistently:
 | Alloy | Amber | `bg-amber-400 hover:bg-amber-500` |
 | Ash | Stone | `bg-stone-400 hover:bg-stone-500` |
 | Ballad | Sky | `bg-sky-400 hover:bg-sky-500` |
-| Coral | Coral | `bg-coral hover:bg-[#e07360]` (custom) |
+| Hannah | Coral | `bg-coral hover:bg-[#e07360]` (custom) |
 | Shimmer | Fuchsia | `bg-fuchsia-400 hover:bg-fuchsia-500` |
 | Cedar | Green | `bg-green-600 hover:bg-green-700` |
 
 ## Custom Color
 
-Coral is defined in `layout.css`:
+Hannah uses coral color defined in `layout.css`:
 
 ```css
 @theme {

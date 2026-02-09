@@ -70,8 +70,19 @@
 			// Finalize the message
 			const lastMsg = conversationLog[conversationLog.length - 1];
 			if (lastMsg?.isStreaming && streamingText) {
-				conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: streamingText }];
-				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', streamingText, currentVoiceId);
+				conversationLog = [
+					...conversationLog.slice(0, -1),
+					{ role: 'assistant', text: streamingText }
+				];
+				if ($user && currentSessionId)
+					saveMessage(
+						$user.id,
+						currentSessionId,
+						currentCharacterName,
+						'assistant',
+						streamingText,
+						currentVoiceId
+					);
 			}
 			streamingText = '';
 		}
@@ -90,27 +101,30 @@
 
 	function updateStreamingMessage(text) {
 		if (!text) return;
-		
+
 		const lastMsg = conversationLog[conversationLog.length - 1];
-		
+
 		// If last message is from user, add new streaming assistant message
 		if (lastMsg?.role === 'user') {
 			conversationLog = [...conversationLog, { role: 'assistant', text, isStreaming: true }];
 		}
 		// If last message is streaming assistant, update it
 		else if (lastMsg?.isStreaming) {
-			conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text, isStreaming: true }];
+			conversationLog = [
+				...conversationLog.slice(0, -1),
+				{ role: 'assistant', text, isStreaming: true }
+			];
 		}
 		// If no messages or last is completed assistant (shouldn't happen normally)
 		else if (!lastMsg || lastMsg.role === 'assistant') {
 			// Check if we need to add a new streaming message
-			const userCount = conversationLog.filter(m => m.role === 'user').length;
-			const assistantCount = conversationLog.filter(m => m.role === 'assistant').length;
+			const userCount = conversationLog.filter((m) => m.role === 'user').length;
+			const assistantCount = conversationLog.filter((m) => m.role === 'assistant').length;
 			if (userCount > assistantCount) {
 				conversationLog = [...conversationLog, { role: 'assistant', text, isStreaming: true }];
 			}
 		}
-		
+
 		requestAnimationFrame(() => {
 			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
 		});
@@ -134,22 +148,52 @@
 		// If we have a completed message, update the log
 		if (latestCompletedText) {
 			const lastMsg = conversationLog[conversationLog.length - 1];
-			
+
 			// Replace streaming message with completed
 			if (lastMsg?.isStreaming) {
-				conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: latestCompletedText }];
+				conversationLog = [
+					...conversationLog.slice(0, -1),
+					{ role: 'assistant', text: latestCompletedText }
+				];
 				isSpeaking = false;
-				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText, currentVoiceId);
+				if ($user && currentSessionId)
+					saveMessage(
+						$user.id,
+						currentSessionId,
+						currentCharacterName,
+						'assistant',
+						latestCompletedText,
+						currentVoiceId
+					);
 			}
 			// Or add if there's no assistant message yet
 			else if (lastMsg?.role === 'user') {
 				conversationLog = [...conversationLog, { role: 'assistant', text: latestCompletedText }];
-				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText, currentVoiceId);
+				if ($user && currentSessionId)
+					saveMessage(
+						$user.id,
+						currentSessionId,
+						currentCharacterName,
+						'assistant',
+						latestCompletedText,
+						currentVoiceId
+					);
 			}
 			// Or update if text changed
 			else if (lastMsg?.role === 'assistant' && lastMsg.text !== latestCompletedText) {
-				conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: latestCompletedText }];
-				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText, currentVoiceId);
+				conversationLog = [
+					...conversationLog.slice(0, -1),
+					{ role: 'assistant', text: latestCompletedText }
+				];
+				if ($user && currentSessionId)
+					saveMessage(
+						$user.id,
+						currentSessionId,
+						currentCharacterName,
+						'assistant',
+						latestCompletedText,
+						currentVoiceId
+					);
 			}
 		}
 
@@ -173,14 +217,16 @@
 			const data = await res.json();
 
 			if (!res.ok) {
-				let msg = data.details ? `${data.error || 'Failed to get token'}: ${data.details}` : (data.error || data.details || 'Failed to get token.');
+				let msg = data.details
+					? `${data.error || 'Failed to get token'}: ${data.details}`
+					: data.error || data.details || 'Failed to get token.';
 				if (data.hint) msg += ` ${data.hint}`;
 				throw new Error(msg);
 			}
 
 			const ephemeralKey = data.value;
 			if (!ephemeralKey) {
-				throw new Error('Couldn\'t get token.');
+				throw new Error("Couldn't get token.");
 			}
 
 			const character = getCharacter(voice);
@@ -203,8 +249,19 @@
 				// Mark streaming message as complete
 				const lastMsg = conversationLog[conversationLog.length - 1];
 				if (lastMsg?.isStreaming) {
-					conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: lastMsg.text }];
-					if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', lastMsg.text, currentVoiceId);
+					conversationLog = [
+						...conversationLog.slice(0, -1),
+						{ role: 'assistant', text: lastMsg.text }
+					];
+					if ($user && currentSessionId)
+						saveMessage(
+							$user.id,
+							currentSessionId,
+							currentCharacterName,
+							'assistant',
+							lastMsg.text,
+							currentVoiceId
+						);
 				}
 			});
 			realtimeSession.transport?.on?.('connection_change', (connStatus) => {
@@ -228,7 +285,7 @@
 					updateStreamingMessage(streamingText);
 				}
 			});
-			
+
 			// Also try transport events
 			realtimeSession.transport?.on?.('message', (event) => handleServerEvent(event));
 
@@ -278,23 +335,23 @@
 
 	function disconnect() {
 		console.log('[API] Disconnecting...');
-		
+
 		// Stop speech recognition
 		stopListening();
-		
+
 		// Clear timers
 		if (autoSendTimer) {
 			clearTimeout(autoSendTimer);
 			autoSendTimer = null;
 		}
-		
+
 		// Reset states
 		liveTranscript = '';
 		finalTranscript = '';
 		isSpeaking = false;
 		streamingText = '';
 		streamingMessageId = null;
-		
+
 		// Close session and WebSocket
 		if (session) {
 			try {
@@ -304,12 +361,13 @@
 				if (ws) {
 					console.log('[API] WebSocket state before close:', ws.readyState);
 					// 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
-					if (ws.readyState === 1) { // OPEN
+					if (ws.readyState === 1) {
+						// OPEN
 						ws.close(1000, 'User disconnected');
 						console.log('[API] WebSocket close() called');
 					}
 				}
-				
+
 				// Close session
 				session.close();
 				console.log('[API] Session close() called');
@@ -318,7 +376,7 @@
 			}
 			session = null;
 		}
-		
+
 		currentSessionId = null;
 		currentVoiceId = null;
 
@@ -326,7 +384,7 @@
 		status = 'disconnected';
 		disconnectMessage = 'Connection closed. No more API calls.';
 		console.log('[API] Disconnected successfully');
-		
+
 		// After 2 seconds, go back to idle
 		setTimeout(() => {
 			if (status === 'disconnected') {
@@ -600,16 +658,22 @@
 
 <div class="h-screen overflow-hidden bg-stone-50 flex">
 	<!-- Left: Controls + Input (Preply-style) -->
-	<aside class="w-full lg:w-[420px] h-screen flex flex-col bg-white border-r border-stone-200 p-8 lg:p-10 overflow-y-auto shrink-0">
+	<aside
+		class="w-full lg:w-[420px] h-screen flex flex-col bg-white border-r border-stone-200 p-8 lg:p-10 overflow-y-auto shrink-0"
+	>
 		<div class="flex-1">
 			<!-- User Auth Section -->
 			{#if $authLoading}
 				<div class="mb-6 flex items-center gap-2 text-stone-400 text-sm">
-					<div class="w-4 h-4 border-2 border-stone-300 border-t-transparent rounded-full animate-spin"></div>
+					<div
+						class="w-4 h-4 border-2 border-stone-300 border-t-transparent rounded-full animate-spin"
+					></div>
 					Loading...
 				</div>
 			{:else if $user}
-				<div class="mb-6 flex items-center justify-between p-3 bg-stone-50 rounded-xl border border-stone-100">
+				<div
+					class="mb-6 flex items-center justify-between p-3 bg-stone-50 rounded-xl border border-stone-100"
+				>
 					<div class="flex items-center gap-3">
 						<div class="w-8 h-8 rounded-full bg-pink-100 flex items-center justify-center">
 							<span class="text-pink-600 text-sm font-medium">
@@ -623,7 +687,7 @@
 					</div>
 					<div class="flex gap-2">
 						<button
-							onclick={() => historyView ? backToMain() : loadHistory()}
+							onclick={() => (historyView ? backToMain() : loadHistory())}
 							class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors"
 						>
 							{historyView ? '← Back' : 'History'}
@@ -657,7 +721,8 @@
 				Your personal English tutor
 			</h1>
 			<p class="text-stone-500 text-sm leading-relaxed mb-10">
-				Practice with a tutor who corrects your grammar, suggests better expressions, and keeps the conversation flowing naturally.
+				Practice with a tutor who corrects your grammar, suggests better expressions, and keeps the
+				conversation flowing naturally.
 			</p>
 
 			{#if error}
@@ -674,7 +739,8 @@
 							onclick={() => connect(id)}
 							class="py-3 rounded-xl {btn} text-white font-medium text-sm transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-1.5"
 						>
-							{label} {emoji} ({mbti})
+							{label}
+							{emoji} ({mbti})
 						</button>
 					{/each}
 				</div>
@@ -683,14 +749,26 @@
 				</p>
 			{:else if status === 'connecting'}
 				<div class="flex flex-col items-center gap-4 py-12">
-					<div class="w-10 h-10 border-2 border-rose-500 border-t-transparent rounded-full animate-spin"></div>
+					<div
+						class="w-10 h-10 border-2 border-rose-500 border-t-transparent rounded-full animate-spin"
+					></div>
 					<p class="text-stone-500 text-sm">Connecting...</p>
 				</div>
 			{:else if status === 'disconnected'}
 				<div class="flex flex-col items-center gap-4 py-12">
 					<div class="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
-						<svg class="w-8 h-8 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+						<svg
+							class="w-8 h-8 text-emerald-600"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M5 13l4 4L19 7"
+							/>
 						</svg>
 					</div>
 					<div class="text-center">
@@ -700,7 +778,9 @@
 				</div>
 			{:else if status === 'error'}
 				<div class="space-y-4">
-					<p class="text-stone-600 text-sm">Connection was lost or an error occurred. Choose a voice to start a new conversation.</p>
+					<p class="text-stone-600 text-sm">
+						Connection was lost or an error occurred. Choose a voice to start a new conversation.
+					</p>
 					<p class="text-stone-500 text-xs">Let's start with</p>
 					<div class="grid grid-cols-2 gap-2 max-h-[320px] overflow-y-auto">
 						{#each voiceOptions as { id, label, emoji, mbti, btn }}
@@ -708,33 +788,47 @@
 								onclick={() => connect(id)}
 								class="py-2.5 rounded-xl {btn} text-white font-medium text-sm transition-all flex items-center justify-center gap-1.5"
 							>
-								{label} {emoji} ({mbti})
+								{label}
+								{emoji} ({mbti})
 							</button>
 						{/each}
 					</div>
 				</div>
 			{:else if status === 'connected'}
 				<div class="space-y-6">
-
 					<!-- Voice / Text mode toggle -->
 					<div class="flex rounded-xl bg-stone-100 p-1">
 						<button
 							onclick={() => setInputMode('voice')}
 							class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all
-								{inputMode === 'voice' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'}"
+								{inputMode === 'voice'
+								? 'bg-white text-stone-900 shadow-sm'
+								: 'text-stone-500 hover:text-stone-700'}"
 						>
 							<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0V8a5 5 0 0110 0v3z" />
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0V8a5 5 0 0110 0v3z"
+								/>
 							</svg>
 							Voice
 						</button>
 						<button
 							onclick={() => setInputMode('text')}
 							class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all
-								{inputMode === 'text' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'}"
+								{inputMode === 'text'
+								? 'bg-white text-stone-900 shadow-sm'
+								: 'text-stone-500 hover:text-stone-700'}"
 						>
 							<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+								/>
 							</svg>
 							Text
 						</button>
@@ -742,26 +836,48 @@
 
 					{#if inputMode === 'voice'}
 						<!-- Voice mode: Live transcription with manual send -->
-						<div class="rounded-2xl border p-5 flex flex-col gap-4 {isListening ? 'bg-emerald-50 border-emerald-100' : 'bg-stone-50 border-stone-200'}">
+						<div
+							class="rounded-2xl border p-5 flex flex-col gap-4 {isListening
+								? 'bg-emerald-50 border-emerald-100'
+								: 'bg-stone-50 border-stone-200'}"
+						>
 							<!-- Mic status indicator -->
 							<div class="flex items-center gap-3">
 								{#if isListening}
 									<div class="relative">
-										<div class="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center animate-pulse">
+										<div
+											class="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center animate-pulse"
+										>
 											<svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-												<path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
-												<path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+												<path
+													d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"
+												/>
+												<path
+													d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"
+												/>
 											</svg>
 										</div>
 									</div>
 									<div>
 										<p class="text-emerald-700 font-medium text-sm">Listening...</p>
-										<p class="text-emerald-600/70 text-xs">Speak naturally. Click send when done.</p>
+										<p class="text-emerald-600/70 text-xs">
+											Speak naturally. Click send when done.
+										</p>
 									</div>
 								{:else}
 									<div class="w-10 h-10 rounded-full bg-stone-200 flex items-center justify-center">
-										<svg class="w-5 h-5 text-stone-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0V8a5 5 0 0110 0v3z" />
+										<svg
+											class="w-5 h-5 text-stone-500"
+											fill="none"
+											stroke="currentColor"
+											viewBox="0 0 24 24"
+										>
+											<path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												stroke-width="1.5"
+												d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0V8a5 5 0 0110 0v3z"
+											/>
 										</svg>
 									</div>
 									<div>
@@ -798,9 +914,17 @@
 										onclick={sendVoiceMessage}
 										class="flex-1 py-3 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-medium text-sm transition-colors flex items-center justify-center gap-2"
 									>
-										Send to {currentCharacterName} {currentCharacterEmoji}{currentCharacterMbti ? ` (${currentCharacterMbti})` : ''}
+										Send to {currentCharacterName}
+										{currentCharacterEmoji}{currentCharacterMbti
+											? ` (${currentCharacterMbti})`
+											: ''}
 										<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+											<path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												stroke-width="2"
+												d="M14 5l7 7m0 0l-7 7m7-7H3"
+											/>
 										</svg>
 									</button>
 								{/if}
@@ -817,7 +941,9 @@
 						</div>
 					{:else}
 						<div class="space-y-3">
-							<label for="text-input" class="block text-sm font-medium text-stone-600">Type your message</label>
+							<label for="text-input" class="block text-sm font-medium text-stone-600"
+								>Type your message</label
+							>
 							<div class="flex gap-2">
 								<input
 									id="text-input"
@@ -844,7 +970,12 @@
 						title="Closes API connection completely"
 					>
 						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+							/>
 						</svg>
 						End & disconnect
 					</button>
@@ -857,14 +988,18 @@
 	<main class="flex-1 flex flex-col min-h-0 overflow-hidden">
 		<div class="flex-1 flex flex-col min-h-0 p-6 lg:p-10">
 			{#if historyView === 'list'}
-				<div class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden">
+				<div
+					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden"
+				>
 					<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50">
 						<h2 class="text-sm font-semibold text-stone-700">Past Conversations</h2>
 					</div>
 					<div class="flex-1 min-h-0 overflow-y-auto p-6">
 						{#if historyLoading}
 							<div class="flex justify-center py-12">
-								<div class="w-8 h-8 border-2 border-pink-500 border-t-transparent rounded-full animate-spin"></div>
+								<div
+									class="w-8 h-8 border-2 border-pink-500 border-t-transparent rounded-full animate-spin"
+								></div>
 							</div>
 						{:else if historySessions.length === 0}
 							<div class="text-center py-12 text-stone-500 text-sm">
@@ -874,22 +1009,42 @@
 						{:else}
 							<div class="space-y-2">
 								{#each historySessions as sess}
-									{@const char = sess.character_voice_id ? getCharacter(sess.character_voice_id) : { label: sess.character_name, emoji: '', personality: '' }}
+									{@const char = sess.character_voice_id
+										? getCharacter(sess.character_voice_id)
+										: { label: sess.character_name, emoji: '', personality: '' }}
 									<button
 										onclick={() => viewSession(sess)}
 										class="w-full text-left p-4 rounded-xl border border-stone-200 hover:bg-stone-50 hover:border-stone-300 transition-colors"
 									>
 										<div class="flex justify-between items-start">
 											<div>
-												<span class="font-medium text-stone-700">{char.label}{char.emoji ? ` ${char.emoji}` : ''}{char.mbti ? ` (${char.mbti})` : ''}</span>
-												<span class="text-stone-400 text-xs ml-2">{sess.message_count} messages</span>
+												<span class="font-medium text-stone-700"
+													>{char.label}{char.emoji ? ` ${char.emoji}` : ''}{char.mbti
+														? ` (${char.mbti})`
+														: ''}</span
+												>
+												<span class="text-stone-400 text-xs ml-2"
+													>{sess.message_count} messages</span
+												>
 												{#if char.mbtiDescription}
-													<p class="text-stone-500 text-xs mt-1 truncate max-w-[200px]" title={char.mbtiDescription}>{char.mbtiDescription}</p>
+													<p
+														class="text-stone-500 text-xs mt-1 truncate max-w-[200px]"
+														title={char.mbtiDescription}
+													>
+														{char.mbtiDescription}
+													</p>
 												{:else if char.personality}
-													<p class="text-stone-500 text-xs mt-1 truncate max-w-[200px]" title={char.personality}>{char.personality}</p>
+													<p
+														class="text-stone-500 text-xs mt-1 truncate max-w-[200px]"
+														title={char.personality}
+													>
+														{char.personality}
+													</p>
 												{/if}
 											</div>
-											<span class="text-xs text-stone-500">{new Date(sess.started_at).toLocaleString()}</span>
+											<span class="text-xs text-stone-500"
+												>{new Date(sess.started_at).toLocaleString()}</span
+											>
 										</div>
 									</button>
 								{/each}
@@ -898,33 +1053,73 @@
 					</div>
 				</div>
 			{:else if historyView === 'detail'}
-				{@const detailChar = selectedSession?.character_voice_id ? getCharacter(selectedSession.character_voice_id) : { label: selectedSession?.character_name ?? 'Tutor', emoji: '', mbti: '', personality: '', mbtiDescription: '' }}
-				<div class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden">
-					<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex flex-col gap-1">
+				{@const detailChar = selectedSession?.character_voice_id
+					? getCharacter(selectedSession.character_voice_id)
+					: {
+							label: selectedSession?.character_name ?? 'Tutor',
+							emoji: '',
+							mbti: '',
+							personality: '',
+							mbtiDescription: ''
+						}}
+				<div
+					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden"
+				>
+					<div
+						class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex flex-col gap-1"
+					>
 						<div class="flex items-center justify-between">
-							<button onclick={backToHistoryList} class="text-sm text-stone-500 hover:text-stone-700 flex items-center gap-1">
-								<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+							<button
+								onclick={backToHistoryList}
+								class="text-sm text-stone-500 hover:text-stone-700 flex items-center gap-1"
+							>
+								<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+									><path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M15 19l-7-7 7-7"
+									/></svg
+								>
 								Back
 							</button>
-							<h2 class="text-sm font-semibold text-stone-700">{detailChar.label}{detailChar.emoji ? ` ${detailChar.emoji}` : ''}{detailChar.mbti ? ` (${detailChar.mbti})` : ''} · {new Date(selectedSession?.started_at).toLocaleString()}</h2>
+							<h2 class="text-sm font-semibold text-stone-700">
+								{detailChar.label}{detailChar.emoji ? ` ${detailChar.emoji}` : ''}{detailChar.mbti
+									? ` (${detailChar.mbti})`
+									: ''} · {new Date(selectedSession?.started_at).toLocaleString()}
+							</h2>
 							<div></div>
 						</div>
 						{#if detailChar.mbtiDescription}
-							<p class="text-stone-500 text-xs" title={detailChar.mbtiDescription}>MBTI: {detailChar.mbtiDescription}</p>
+							<p class="text-stone-500 text-xs" title={detailChar.mbtiDescription}>
+								MBTI: {detailChar.mbtiDescription}
+							</p>
 						{:else if detailChar.personality}
-							<p class="text-stone-500 text-xs" title={detailChar.personality}>AI personality: {detailChar.personality}</p>
+							<p class="text-stone-500 text-xs" title={detailChar.personality}>
+								AI personality: {detailChar.personality}
+							</p>
 						{/if}
 					</div>
 					<div class="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
 						{#if historyLoading}
 							<div class="flex justify-center py-12">
-								<div class="w-8 h-8 border-2 border-pink-500 border-t-transparent rounded-full animate-spin"></div>
+								<div
+									class="w-8 h-8 border-2 border-pink-500 border-t-transparent rounded-full animate-spin"
+								></div>
 							</div>
 						{:else}
 							{#each historyMessages as msg}
 								<div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'}">
-									<div class="max-w-[85%] rounded-2xl px-4 py-3 text-sm {msg.role === 'user' ? 'bg-rose-50 text-stone-900 border border-rose-100' : 'bg-stone-50 text-stone-800 border border-stone-100'}">
-										<span class="text-xs font-medium text-stone-600 block mb-1.5">{msg.role === 'user' ? 'You' : `${detailChar.label}${detailChar.emoji ? ` ${detailChar.emoji}` : ''}${detailChar.mbti ? ` (${detailChar.mbti})` : ''}`}</span>
+									<div
+										class="max-w-[85%] rounded-2xl px-4 py-3 text-sm {msg.role === 'user'
+											? 'bg-rose-50 text-stone-900 border border-rose-100'
+											: 'bg-stone-50 text-stone-800 border border-stone-100'}"
+									>
+										<span class="text-xs font-medium text-stone-600 block mb-1.5"
+											>{msg.role === 'user'
+												? 'You'
+												: `${detailChar.label}${detailChar.emoji ? ` ${detailChar.emoji}` : ''}${detailChar.mbti ? ` (${detailChar.mbti})` : ''}`}</span
+										>
 										<p class="whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
 									</div>
 								</div>
@@ -933,90 +1128,128 @@
 					</div>
 				</div>
 			{:else}
-			<div class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden">
-				<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between gap-4 flex-wrap">
-					<div class="flex items-center gap-2">
-						<h2 class="text-sm font-semibold text-stone-700">Conversation</h2>
+				<div
+					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden"
+				>
+					<div
+						class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between gap-4 flex-wrap"
+					>
+						<div class="flex items-center gap-2">
+							<h2 class="text-sm font-semibold text-stone-700">Conversation</h2>
+							{#if status === 'connected'}
+								<span
+									class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"
+									title="API Connected"
+								></span>
+							{:else if status === 'disconnected' || status === 'error'}
+								<span class="w-2 h-2 rounded-full bg-red-500" title="Disconnected"></span>
+							{:else}
+								<span class="w-2 h-2 rounded-full bg-stone-300" title="Not connected"></span>
+							{/if}
+						</div>
 						{#if status === 'connected'}
-							<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="API Connected"></span>
-						{:else if status === 'disconnected' || status === 'error'}
-							<span class="w-2 h-2 rounded-full bg-red-500" title="Disconnected"></span>
-						{:else}
-							<span class="w-2 h-2 rounded-full bg-stone-300" title="Not connected"></span>
+							<div class="flex gap-2 flex-wrap">
+								<button
+									onclick={requestRandomQuestion}
+									title="Get a random question to practice"
+									class="px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 text-xs font-medium transition-colors"
+								>
+									🥳
+								</button>
+								<button
+									onclick={requestGrammarCorrection}
+									disabled={!hasUserMessage()}
+									title={hasUserMessage()
+										? 'Correct grammar of your last message'
+										: 'Send a message first'}
+									class="px-3 py-1.5 rounded-lg border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium transition-colors"
+								>
+									Adjust grammar
+								</button>
+								<button
+									onclick={requestParaphrase}
+									disabled={!hasUserMessage()}
+									title={hasUserMessage() ? 'Paraphrase your last message' : 'Send a message first'}
+									class="px-3 py-1.5 rounded-lg border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium transition-colors"
+								>
+									Paraphrase
+								</button>
+							</div>
 						{/if}
 					</div>
-					{#if status === 'connected'}
-						<div class="flex gap-2 flex-wrap">
-							<button
-								onclick={requestRandomQuestion}
-								title="Get a random question to practice"
-								class="px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 text-xs font-medium transition-colors"
+					<div
+						bind:this={logContainer}
+						class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-6 space-y-4"
+						role="log"
+						aria-label="Conversation history"
+					>
+						{#if conversationLog.length === 0}
+							<div
+								class="flex flex-col items-center justify-center h-full min-h-[280px] text-center"
 							>
-								🥳
-							</button>
-							<button
-								onclick={requestGrammarCorrection}
-								disabled={!hasUserMessage()}
-								title={hasUserMessage() ? 'Correct grammar of your last message' : 'Send a message first'}
-								class="px-3 py-1.5 rounded-lg border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium transition-colors"
-							>
-								Adjust grammar
-							</button>
-							<button
-								onclick={requestParaphrase}
-								disabled={!hasUserMessage()}
-								title={hasUserMessage() ? 'Paraphrase your last message' : 'Send a message first'}
-								class="px-3 py-1.5 rounded-lg border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium transition-colors"
-							>
-								Paraphrase
-							</button>
-						</div>
-					{/if}
-				</div>
-				<div
-					bind:this={logContainer}
-					class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-6 space-y-4"
-					role="log"
-					aria-label="Conversation history"
-				>
-					{#if conversationLog.length === 0}
-						<div class="flex flex-col items-center justify-center h-full min-h-[280px] text-center">
-							<div class="w-16 h-16 rounded-2xl bg-stone-100 flex items-center justify-center mb-4">
-								<svg class="w-8 h-8 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-								</svg>
-							</div>
-							<p class="text-stone-500 text-sm max-w-[240px]">
-								Your conversation will show up here once you start!
-							</p>
-						</div>
-					{:else}
-						{#each conversationLog as msg, i}
-							{@const isLastAssistant = msg.role === 'assistant' && i === conversationLog.length - 1}
-							{@const showSpeaking = isLastAssistant && (msg.isStreaming || isSpeaking)}
-							<div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'}">
 								<div
-									class="max-w-[85%] rounded-2xl px-4 py-3 text-sm {msg.role === 'user'
-										? 'bg-rose-50 text-stone-900 border border-rose-100'
-										: 'bg-stone-50 text-stone-800 border border-stone-100'}"
+									class="w-16 h-16 rounded-2xl bg-stone-100 flex items-center justify-center mb-4"
 								>
-									<span class="text-xs font-medium text-stone-600 mb-1.5 flex items-center gap-1.5">
-										{msg.role === 'user' ? 'You' : currentCharacterName} {msg.role === 'assistant' ? `${currentCharacterEmoji}${currentCharacterMbti ? ` (${currentCharacterMbti})` : ''}` : ''}
-										{#if showSpeaking}
-											<span class="speaking-animation inline-flex items-center gap-0.5">
-												<span class="w-1 h-1 bg-emerald-500 rounded-full animate-bounce" style="animation-delay: 0ms"></span>
-												<span class="w-1 h-1 bg-emerald-500 rounded-full animate-bounce" style="animation-delay: 150ms"></span>
-												<span class="w-1 h-1 bg-emerald-500 rounded-full animate-bounce" style="animation-delay: 300ms"></span>
-											</span>
-										{/if}
-									</span>
-									<p class="whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
+									<svg
+										class="w-8 h-8 text-stone-400"
+										fill="none"
+										stroke="currentColor"
+										viewBox="0 0 24 24"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="1.5"
+											d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+										/>
+									</svg>
 								</div>
+								<p class="text-stone-500 text-sm max-w-[240px]">
+									Your conversation will show up here once you start!
+								</p>
 							</div>
-						{/each}
-					{/if}
+						{:else}
+							{#each conversationLog as msg, i}
+								{@const isLastAssistant =
+									msg.role === 'assistant' && i === conversationLog.length - 1}
+								{@const showSpeaking = isLastAssistant && (msg.isStreaming || isSpeaking)}
+								<div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'}">
+									<div
+										class="max-w-[85%] rounded-2xl px-4 py-3 text-sm {msg.role === 'user'
+											? 'bg-rose-50 text-stone-900 border border-rose-100'
+											: 'bg-stone-50 text-stone-800 border border-stone-100'}"
+									>
+										<span
+											class="text-xs font-medium text-stone-600 mb-1.5 flex items-center gap-1.5"
+										>
+											{msg.role === 'user' ? 'You' : currentCharacterName}
+											{msg.role === 'assistant'
+												? `${currentCharacterEmoji}${currentCharacterMbti ? ` (${currentCharacterMbti})` : ''}`
+												: ''}
+											{#if showSpeaking}
+												<span class="speaking-animation inline-flex items-center gap-0.5">
+													<span
+														class="w-1 h-1 bg-emerald-500 rounded-full animate-bounce"
+														style="animation-delay: 0ms"
+													></span>
+													<span
+														class="w-1 h-1 bg-emerald-500 rounded-full animate-bounce"
+														style="animation-delay: 150ms"
+													></span>
+													<span
+														class="w-1 h-1 bg-emerald-500 rounded-full animate-bounce"
+														style="animation-delay: 300ms"
+													></span>
+												</span>
+											{/if}
+										</span>
+										<p class="whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
+									</div>
+								</div>
+							{/each}
+						{/if}
+					</div>
 				</div>
-			</div>
 			{/if}
 		</div>
 	</main>
@@ -1024,8 +1257,5 @@
 
 <!-- 온보딩 모달: 로그인 후 프로필/동의 미완료 시 표시 -->
 {#if $user && !$authLoading && !$onboardingLoading && !$onboardingComplete}
-	<OnboardingModal
-		userId={$user.id}
-		onComplete={() => checkOnboardingStatus($user.id)}
-	/>
+	<OnboardingModal userId={$user.id} onComplete={() => checkOnboardingStatus($user.id)} />
 {/if}

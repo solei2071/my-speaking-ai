@@ -5,13 +5,24 @@
 }
 
 body {
-	font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+	font-family:
+		'DM Sans',
+		system-ui,
+		-apple-system,
+		sans-serif;
 }
 
 /* Voice mode - listening animation */
 @keyframes listening-pulse {
-	0%, 100% { opacity: 0.4; transform: scale(1); }
-	50% { opacity: 0; transform: scale(1.15); }
+	0%,
+	100% {
+		opacity: 0.4;
+		transform: scale(1);
+	}
+	50% {
+		opacity: 0;
+		transform: scale(1.15);
+	}
 }
 
 .listening-ripple {
@@ -24,8 +35,15 @@ body {
 }
 
 @keyframes speaking-bounce {
-	0%, 100% { transform: translateY(0); opacity: 0.5; }
-	50% { transform: translateY(-3px); opacity: 1; }
+	0%,
+	100% {
+		transform: translateY(0);
+		opacity: 0.5;
+	}
+	50% {
+		transform: translateY(-3px);
+		opacity: 1;
+	}
 }
 
 /* 세련된 그라데이션 배경 - 세이지, 소프트 블루, 연한 그레이 */

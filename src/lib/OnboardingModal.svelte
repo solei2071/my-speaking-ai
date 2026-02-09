@@ -15,10 +15,7 @@
 	let showPrivacyDetail = $state(false);
 
 	let canSubmit = $derived(
-		displayName.trim().length > 0 &&
-		phone.trim().length > 0 &&
-		agreeTerms &&
-		agreePrivacy
+		displayName.trim().length > 0 && phone.trim().length > 0 && agreeTerms && agreePrivacy
 	);
 
 	function formatPhone(value) {
@@ -79,13 +76,20 @@
 
 <!-- Fullscreen overlay modal -->
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-	<div class="w-full max-w-lg bg-white rounded-2xl shadow-xl border border-stone-200 overflow-hidden max-h-[90vh] flex flex-col">
+	<div
+		class="w-full max-w-lg bg-white rounded-2xl shadow-xl border border-stone-200 overflow-hidden max-h-[90vh] flex flex-col"
+	>
 		<!-- Header -->
 		<div class="shrink-0 px-8 pt-8 pb-4">
 			<div class="flex items-center gap-3 mb-2">
 				<div class="w-10 h-10 rounded-xl bg-pink-100 flex items-center justify-center">
 					<svg class="w-5 h-5 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
+						/>
 					</svg>
 				</div>
 				<div>
@@ -140,7 +144,9 @@
 					<p class="text-sm font-medium text-stone-700 mb-3">약관 동의</p>
 
 					<!-- 전체 동의 -->
-					<label class="flex items-center gap-3 p-3 rounded-xl bg-stone-50 border border-stone-200 cursor-pointer hover:bg-stone-100 transition-colors mb-3">
+					<label
+						class="flex items-center gap-3 p-3 rounded-xl bg-stone-50 border border-stone-200 cursor-pointer hover:bg-stone-100 transition-colors mb-3"
+					>
 						<input
 							type="checkbox"
 							checked={agreeTerms && agreePrivacy}
@@ -165,7 +171,7 @@
 							</label>
 							<button
 								type="button"
-								onclick={() => showTermsDetail = !showTermsDetail}
+								onclick={() => (showTermsDetail = !showTermsDetail)}
 								class="text-xs text-stone-400 hover:text-stone-600 underline transition-colors"
 							>
 								{showTermsDetail ? '접기' : '보기'}
@@ -173,13 +179,31 @@
 						</div>
 
 						{#if showTermsDetail}
-							<div class="ml-7 p-4 bg-stone-50 rounded-xl border border-stone-100 text-xs text-stone-600 leading-relaxed max-h-40 overflow-y-auto">
+							<div
+								class="ml-7 p-4 bg-stone-50 rounded-xl border border-stone-100 text-xs text-stone-600 leading-relaxed max-h-40 overflow-y-auto"
+							>
 								<p class="font-semibold mb-2">서비스 이용약관</p>
-								<p class="mb-2">제1조 (목적) 이 약관은 My Speaking AI(이하 "서비스")가 제공하는 영어 회화 학습 서비스의 이용과 관련하여 서비스와 이용자 간의 권리, 의무 및 책임사항을 규정함을 목적으로 합니다.</p>
-								<p class="mb-2">제2조 (정의) ① "서비스"란 AI 기반 영어 회화 연습 플랫폼을 의미합니다. ② "이용자"란 이 약관에 따라 서비스를 이용하는 자를 말합니다.</p>
-								<p class="mb-2">제3조 (약관의 효력) 이 약관은 서비스 화면에 게시하거나 기타의 방법으로 이용자에게 공지함으로써 효력이 발생합니다.</p>
-								<p class="mb-2">제4조 (서비스 이용) ① 서비스는 AI를 활용한 영어 회화 연습 기능을 제공합니다. ② 이용자는 서비스를 개인 학습 목적으로만 이용할 수 있습니다.</p>
-								<p>제5조 (면책) 서비스는 AI가 생성한 응답의 정확성을 보장하지 않으며, 학습 참고용으로만 활용하시기 바랍니다.</p>
+								<p class="mb-2">
+									제1조 (목적) 이 약관은 My Speaking AI(이하 "서비스")가 제공하는 영어 회화 학습
+									서비스의 이용과 관련하여 서비스와 이용자 간의 권리, 의무 및 책임사항을 규정함을
+									목적으로 합니다.
+								</p>
+								<p class="mb-2">
+									제2조 (정의) ① "서비스"란 AI 기반 영어 회화 연습 플랫폼을 의미합니다. ② "이용자"란
+									이 약관에 따라 서비스를 이용하는 자를 말합니다.
+								</p>
+								<p class="mb-2">
+									제3조 (약관의 효력) 이 약관은 서비스 화면에 게시하거나 기타의 방법으로 이용자에게
+									공지함으로써 효력이 발생합니다.
+								</p>
+								<p class="mb-2">
+									제4조 (서비스 이용) ① 서비스는 AI를 활용한 영어 회화 연습 기능을 제공합니다. ②
+									이용자는 서비스를 개인 학습 목적으로만 이용할 수 있습니다.
+								</p>
+								<p>
+									제5조 (면책) 서비스는 AI가 생성한 응답의 정확성을 보장하지 않으며, 학습
+									참고용으로만 활용하시기 바랍니다.
+								</p>
 							</div>
 						{/if}
 
@@ -197,7 +221,7 @@
 							</label>
 							<button
 								type="button"
-								onclick={() => showPrivacyDetail = !showPrivacyDetail}
+								onclick={() => (showPrivacyDetail = !showPrivacyDetail)}
 								class="text-xs text-stone-400 hover:text-stone-600 underline transition-colors"
 							>
 								{showPrivacyDetail ? '접기' : '보기'}
@@ -205,14 +229,28 @@
 						</div>
 
 						{#if showPrivacyDetail}
-							<div class="ml-7 p-4 bg-stone-50 rounded-xl border border-stone-100 text-xs text-stone-600 leading-relaxed max-h-40 overflow-y-auto">
+							<div
+								class="ml-7 p-4 bg-stone-50 rounded-xl border border-stone-100 text-xs text-stone-600 leading-relaxed max-h-40 overflow-y-auto"
+							>
 								<p class="font-semibold mb-2">개인정보 처리방침</p>
 								<p class="mb-2">1. 수집하는 개인정보 항목: 이메일, 이름, 전화번호, 대화 기록</p>
-								<p class="mb-2">2. 개인정보의 수집 및 이용 목적: 서비스 제공, 회원 관리, 학습 기록 저장 및 분석</p>
-								<p class="mb-2">3. 개인정보의 보유 및 이용 기간: 회원 탈퇴 시까지 (탈퇴 후 즉시 파기)</p>
-								<p class="mb-2">4. 개인정보의 제3자 제공: 원칙적으로 이용자의 개인정보를 외부에 제공하지 않습니다. 다만, 법령에 의한 경우는 예외입니다.</p>
-								<p class="mb-2">5. 개인정보의 파기: 보유 기간 경과 또는 처리 목적 달성 후 지체 없이 파기합니다.</p>
-								<p>6. 이용자의 권리: 이용자는 언제든지 자신의 개인정보에 대해 열람, 수정, 삭제를 요청할 수 있습니다.</p>
+								<p class="mb-2">
+									2. 개인정보의 수집 및 이용 목적: 서비스 제공, 회원 관리, 학습 기록 저장 및 분석
+								</p>
+								<p class="mb-2">
+									3. 개인정보의 보유 및 이용 기간: 회원 탈퇴 시까지 (탈퇴 후 즉시 파기)
+								</p>
+								<p class="mb-2">
+									4. 개인정보의 제3자 제공: 원칙적으로 이용자의 개인정보를 외부에 제공하지 않습니다.
+									다만, 법령에 의한 경우는 예외입니다.
+								</p>
+								<p class="mb-2">
+									5. 개인정보의 파기: 보유 기간 경과 또는 처리 목적 달성 후 지체 없이 파기합니다.
+								</p>
+								<p>
+									6. 이용자의 권리: 이용자는 언제든지 자신의 개인정보에 대해 열람, 수정, 삭제를
+									요청할 수 있습니다.
+								</p>
 							</div>
 						{/if}
 					</div>
@@ -230,7 +268,9 @@
 			>
 				{#if isLoading}
 					<span class="flex items-center justify-center gap-2">
-						<div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+						<div
+							class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"
+						></div>
 						저장 중...
 					</span>
 				{:else}

@@ -18,16 +18,14 @@
 
 		try {
 			// Simple query to test connection
-			const { data, error: queryError } = await supabase
-				.from('messages')
-				.select('count')
-				.limit(1);
+			const { data, error: queryError } = await supabase.from('messages').select('count').limit(1);
 
 			if (queryError) {
 				if (queryError.code === '42P01') {
 					// Table doesn't exist
 					connectionStatus = 'Connected (table not found)';
-					testResult = 'Connection successful! But "messages" table does not exist. Create it first.';
+					testResult =
+						'Connection successful! But "messages" table does not exist. Create it first.';
 				} else {
 					throw queryError;
 				}
@@ -50,9 +48,7 @@
 		try {
 			const { data, error: insertError } = await supabase
 				.from('messages')
-				.insert([
-					{ user_name: testName, content: testMessage }
-				])
+				.insert([{ user_name: testName, content: testMessage }])
 				.select();
 
 			if (insertError) throw insertError;
@@ -90,15 +86,12 @@
 
 	async function deleteAllMessages() {
 		if (!confirm('Delete all test messages?')) return;
-		
+
 		isLoading = true;
 		error = null;
 
 		try {
-			const { error: deleteError } = await supabase
-				.from('messages')
-				.delete()
-				.neq('id', 0); // Delete all
+			const { error: deleteError } = await supabase.from('messages').delete().neq('id', 0); // Delete all
 
 			if (deleteError) throw deleteError;
 
@@ -119,9 +112,15 @@
 		<!-- Connection Status -->
 		<div class="bg-white rounded-xl border border-stone-200 p-6 space-y-4">
 			<h2 class="font-semibold text-stone-700">Connection Status</h2>
-			
+
 			<div class="flex items-center gap-3">
-				<span class="w-3 h-3 rounded-full {connectionStatus === 'Connected' ? 'bg-emerald-500' : connectionStatus === 'Failed' ? 'bg-red-500' : 'bg-stone-300'}"></span>
+				<span
+					class="w-3 h-3 rounded-full {connectionStatus === 'Connected'
+						? 'bg-emerald-500'
+						: connectionStatus === 'Failed'
+							? 'bg-red-500'
+							: 'bg-stone-300'}"
+				></span>
 				<span class="text-sm font-medium">{connectionStatus}</span>
 			</div>
 
@@ -143,14 +142,15 @@
 
 		{#if error}
 			<div class="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 text-sm">
-				<strong>Error:</strong> {error}
+				<strong>Error:</strong>
+				{error}
 			</div>
 		{/if}
 
 		<!-- Insert Test Data -->
 		<div class="bg-white rounded-xl border border-stone-200 p-6 space-y-4">
 			<h2 class="font-semibold text-stone-700">Insert Test Data</h2>
-			
+
 			<div class="space-y-3">
 				<div>
 					<label class="block text-xs text-stone-500 mb-1">User Name</label>
@@ -199,13 +199,15 @@
 		{#if allMessages.length > 0}
 			<div class="bg-white rounded-xl border border-stone-200 p-6 space-y-4">
 				<h2 class="font-semibold text-stone-700">Messages ({allMessages.length})</h2>
-				
+
 				<div class="space-y-2">
 					{#each allMessages as msg}
 						<div class="bg-stone-50 rounded-lg p-3 text-sm">
 							<div class="flex justify-between items-start">
 								<span class="font-medium text-stone-700">{msg.user_name}</span>
-								<span class="text-xs text-stone-400">{new Date(msg.created_at).toLocaleString()}</span>
+								<span class="text-xs text-stone-400"
+									>{new Date(msg.created_at).toLocaleString()}</span
+								>
 							</div>
 							<p class="text-stone-600 mt-1">{msg.content}</p>
 						</div>
@@ -217,7 +219,8 @@
 		<!-- SQL Query Reference -->
 		<div class="bg-stone-100 rounded-xl border border-stone-200 p-6 space-y-4">
 			<h2 class="font-semibold text-stone-700">SQL Query (Run in Supabase SQL Editor)</h2>
-			<pre class="bg-stone-900 text-stone-100 rounded-lg p-4 text-xs overflow-x-auto"><code>-- Create messages table for testing
+			<pre class="bg-stone-900 text-stone-100 rounded-lg p-4 text-xs overflow-x-auto"><code
+					>-- Create messages table for testing
 CREATE TABLE public.messages (
   id BIGSERIAL PRIMARY KEY,
   user_name TEXT NOT NULL,
@@ -230,11 +233,10 @@ ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 
 -- Allow all operations for now (for testing)
 CREATE POLICY "Allow all" ON public.messages
-  FOR ALL USING (true) WITH CHECK (true);</code></pre>
+  FOR ALL USING (true) WITH CHECK (true);</code
+				></pre>
 		</div>
 
-		<a href="/" class="inline-block text-sm text-blue-500 hover:text-blue-600">
-			← Back to main
-		</a>
+		<a href="/" class="inline-block text-sm text-blue-500 hover:text-blue-600"> ← Back to main </a>
 	</div>
 </div>

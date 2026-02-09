@@ -1,9 +1,13 @@
 import { supabase } from './supabase.js';
 import { writable } from 'svelte/store';
+import { checkOnboardingStatus, onboardingComplete, onboardingLoading } from './profile.js';
 
 // Auth store
 export const user = writable(null);
 export const authLoading = writable(true);
+
+// Re-export for convenience
+export { onboardingComplete, onboardingLoading };
 
 // Initialize auth state
 export async function initAuth() {
@@ -13,9 +17,21 @@ export async function initAuth() {
 	const { data: { session } } = await supabase.auth.getSession();
 	user.set(session?.user ?? null);
 	
+	// 로그인된 상태면 온보딩 완료 여부 확인
+	if (session?.user) {
+		await checkOnboardingStatus(session.user.id);
+	}
+	
 	// Listen for auth changes
-	supabase.auth.onAuthStateChange((_event, session) => {
+	supabase.auth.onAuthStateChange(async (_event, session) => {
 		user.set(session?.user ?? null);
+		
+		// 로그인 시 온보딩 상태 체크
+		if (session?.user) {
+			await checkOnboardingStatus(session.user.id);
+		} else {
+			onboardingComplete.set(false);
+		}
 	});
 	
 	authLoading.set(false);

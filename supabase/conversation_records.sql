@@ -6,6 +6,7 @@ CREATE TABLE public.conversation_records (
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
   session_id TEXT NOT NULL,
   character_name TEXT NOT NULL,
+  character_voice_id TEXT,  -- AI voice id (sage, echo, alloy 등) → characters.js 참조
   role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
   content TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()

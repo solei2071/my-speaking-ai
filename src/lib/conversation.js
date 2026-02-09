@@ -1,16 +1,19 @@
 import { supabase } from './supabase.js';
 
 /** Save a single message to conversation_records */
-export async function saveMessage(userId, sessionId, characterName, role, content) {
+export async function saveMessage(userId, sessionId, characterName, role, content, characterVoiceId = null) {
 	if (!userId || !sessionId || !content?.trim()) return;
 
-	const { error } = await supabase.from('conversation_records').insert({
+	const row = {
 		user_id: userId,
 		session_id: sessionId,
 		character_name: characterName,
 		role: role === 'user' ? 'user' : 'assistant',
 		content: content.trim()
-	});
+	};
+	if (characterVoiceId != null) row.character_voice_id = characterVoiceId;
+
+	const { error } = await supabase.from('conversation_records').insert(row);
 
 	if (error) console.error('[Conversation] Save failed:', error);
 }
@@ -21,7 +24,7 @@ export async function fetchSessions(userId) {
 
 	const { data, error } = await supabase
 		.from('conversation_records')
-		.select('session_id, character_name, created_at')
+		.select('session_id, character_name, character_voice_id, created_at')
 		.eq('user_id', userId)
 		.order('created_at', { ascending: true });
 
@@ -38,6 +41,7 @@ export async function fetchSessions(userId) {
 			bySession.set(sid, {
 				session_id: sid,
 				character_name: row.character_name,
+				character_voice_id: row.character_voice_id ?? null,
 				started_at: row.created_at,
 				message_count: 0
 			});

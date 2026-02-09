@@ -1,4 +1,7 @@
 import { env } from '$env/dynamic/private';
+import { CHARACTERS, getCharacter, getVoiceForCharacter } from '$lib/characters.js';
+
+const VALID_CHAR_IDS = Object.keys(CHARACTERS);
 
 /** @type {import('./$types').RequestHandler} */
 export async function POST({ request }) {
@@ -10,23 +13,16 @@ export async function POST({ request }) {
 		);
 	}
 
-	const VALID_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'];
-	let voice = 'alloy';
+	let charId = 'alloy';
 	try {
 		const body = await request.json();
-		const requested = body?.voice;
-		if (requested && VALID_VOICES.includes(requested)) voice = requested;
+		const requested = body?.voice ?? body?.character;
+		if (requested && VALID_CHAR_IDS.includes(requested)) charId = requested;
 	} catch (_) {}
 
-	const sessionConfig = {
-		session: {
-			type: 'realtime',
-			model: 'gpt-4o-mini-realtime-preview',
-			audio: {
-				output: { voice }
-			},
-			instructions: `You are a friendly English conversation teacher for intermediate learners.
-
+	const character = getCharacter(charId);
+	const voice = getVoiceForCharacter(charId);
+	const baseInstructions = `
 CRITICAL - You MUST follow this EXACT format EVERY time the student speaks:
 
 STEP 1 - Grammar correction (if needed):
@@ -51,7 +47,18 @@ Another way: 'I popped into the store yesterday.'
 [Then your conversational response here]"
 
 ALWAYS do steps 1-2 first, then respond. Never skip the paraphrase variations.
-Speak clearly at a moderate pace. Be encouraging and friendly.`
+Speak clearly at a moderate pace.
+`;
+
+	const sessionConfig = {
+		session: {
+			type: 'realtime',
+			model: 'gpt-4o-mini-realtime-preview',
+			audio: {
+				output: { voice }
+			},
+			instructions: `You are ${character.label}, a friendly English conversation teacher for intermediate learners. ${character.personality}
+${baseInstructions}`
 		}
 	};
 

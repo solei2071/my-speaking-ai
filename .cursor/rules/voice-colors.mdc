@@ -6,20 +6,26 @@ alwaysApply: false
 
 # Voice Character Color Scheme
 
-Each voice character has a distinct color. Use these consistently:
+Each voice character is defined in `src/lib/characters.js` with label, emoji, mbti, btn styles, and personality. 16 characters total.
 
-| Character | Color | Tailwind Classes |
-|-----------|-------|------------------|
-| Rachel | Pink | `bg-pink-400 hover:bg-pink-500` |
-| Sh | Teal | `bg-teal-400 hover:bg-teal-500` |
-| Arnold | Emerald | `bg-emerald-400 hover:bg-emerald-500` |
-| Marin | Violet | `bg-violet-400 hover:bg-violet-500` |
-| Alloy | Amber | `bg-amber-400 hover:bg-amber-500` |
-| Ash | Stone | `bg-stone-400 hover:bg-stone-500` |
-| Ballad | Sky | `bg-sky-400 hover:bg-sky-500` |
-| Hannah | Coral | `bg-coral hover:bg-[#e07360]` (custom) |
-| Shimmer | Fuchsia | `bg-fuchsia-400 hover:bg-fuchsia-500` |
-| Cedar | Green | `bg-green-600 hover:bg-green-700` |
+| Character | Emoji | MBTI |
+|-----------|-------|------|
+| Rachel | 💕 | ISFJ |
+| Sh | 🎯 | ISTJ |
+| Arnold | 💪 | ENTJ |
+| Marin | 🎨 | ISFP |
+| Alloy | ☀️ | ESFP |
+| Ash | 📚 | INTP |
+| Ballad | 🎵 | INFP |
+| Hannah | 🌺 | ESFJ |
+| Shimmer | ✨ | INTJ |
+| Cedar | 🌲 | ISTP |
+| Jessica | 📋 | ESTJ |
+| Ruby | 💎 | ENFP |
+| Jane | 🔮 | INFJ |
+| Luna | 🌙 | ENTP |
+| Monaco | 🏎️ | ESTP |
+| Shane | 🌟 | ENFJ |
 
 ## Custom Color
 
@@ -33,4 +39,4 @@ Hannah uses coral color defined in `layout.css`:
 
 ## Usage
 
-Use the same colors in both `voiceOptions` and `errorVoiceOptions` arrays.
+Use `voiceOptions` and `getCharacter()` from `$lib/characters.js`. Colors and emojis are defined there.

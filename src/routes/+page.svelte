@@ -1,14 +1,18 @@
 <script>
 	import { RealtimeAgent, RealtimeSession } from '@openai/agents-realtime';
-	import { user, authLoading, signOut } from '$lib/auth.js';
+	import { user, authLoading, signOut, onboardingComplete, onboardingLoading } from '$lib/auth.js';
 	import { saveMessage, fetchSessions, fetchSessionMessages } from '$lib/conversation.js';
-
-	const VOICE_LABELS = { sage: 'Rachel', echo: 'Sh', verse: 'Arnold', marin: 'Marin', alloy: 'Alloy', ash: 'Ash', ballad: 'Ballad', coral: 'Hannah', shimmer: 'Shimmer', cedar: 'Cedar' };
+	import { getCharacter, voiceOptions } from '$lib/characters.js';
+	import OnboardingModal from '$lib/OnboardingModal.svelte';
+	import { checkOnboardingStatus } from '$lib/profile.js';
 	let status = $state('idle');
 	let currentSessionId = $state(null);
 	let error = $state(null);
 	let session = $state(null);
 	let currentCharacterName = $state('Tutor');
+	let currentCharacterEmoji = $state('');
+	let currentCharacterMbti = $state('');
+	let currentVoiceId = $state(null);
 	let conversationLog = $state([]);
 	let logContainer = $state(null);
 	let textInput = $state('');
@@ -67,7 +71,7 @@
 			const lastMsg = conversationLog[conversationLog.length - 1];
 			if (lastMsg?.isStreaming && streamingText) {
 				conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: streamingText }];
-				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', streamingText);
+				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', streamingText, currentVoiceId);
 			}
 			streamingText = '';
 		}
@@ -135,17 +139,17 @@
 			if (lastMsg?.isStreaming) {
 				conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: latestCompletedText }];
 				isSpeaking = false;
-				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText);
+				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText, currentVoiceId);
 			}
 			// Or add if there's no assistant message yet
 			else if (lastMsg?.role === 'user') {
 				conversationLog = [...conversationLog, { role: 'assistant', text: latestCompletedText }];
-				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText);
+				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText, currentVoiceId);
 			}
 			// Or update if text changed
 			else if (lastMsg?.role === 'assistant' && lastMsg.text !== latestCompletedText) {
 				conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: latestCompletedText }];
-				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText);
+				if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', latestCompletedText, currentVoiceId);
 			}
 		}
 
@@ -179,9 +183,10 @@
 				throw new Error('Couldn\'t get token.');
 			}
 
+			const character = getCharacter(voice);
 			const agent = new RealtimeAgent({
-				name: 'English Teacher',
-				instructions: `You are a friendly English conversation teacher for intermediate learners.`
+				name: character.label,
+				instructions: `You are ${character.label}, a friendly English conversation teacher for intermediate learners. ${character.personality}`
 			});
 
 			const realtimeSession = new RealtimeSession(agent);
@@ -199,7 +204,7 @@
 				const lastMsg = conversationLog[conversationLog.length - 1];
 				if (lastMsg?.isStreaming) {
 					conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text: lastMsg.text }];
-					if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', lastMsg.text);
+					if ($user && currentSessionId) saveMessage($user.id, currentSessionId, currentCharacterName, 'assistant', lastMsg.text, currentVoiceId);
 				}
 			});
 			realtimeSession.transport?.on?.('connection_change', (connStatus) => {
@@ -252,7 +257,11 @@
 			}, 100);
 
 			session = realtimeSession;
-			currentCharacterName = VOICE_LABELS[voice] ?? 'Tutor';
+			const char = getCharacter(voice);
+			currentCharacterName = char.label;
+			currentCharacterEmoji = char.emoji;
+			currentCharacterMbti = char.mbti ?? '';
+			currentVoiceId = voice;
 			status = 'connected';
 			inputMode = 'voice';
 			// Keep RealtimeSession mic muted - we use Web Speech API for input
@@ -311,6 +320,7 @@
 		}
 		
 		currentSessionId = null;
+		currentVoiceId = null;
 
 		// Show disconnection confirmation
 		status = 'disconnected';
@@ -358,7 +368,7 @@
 
 		// Save to DB
 		if ($user && currentSessionId) {
-			saveMessage($user.id, currentSessionId, currentCharacterName, 'user', text);
+			saveMessage($user.id, currentSessionId, currentCharacterName, 'user', text, currentVoiceId);
 		}
 
 		// Send to tutor
@@ -539,7 +549,7 @@
 
 		// Save to DB
 		if ($user && currentSessionId) {
-			saveMessage($user.id, currentSessionId, currentCharacterName, 'user', text);
+			saveMessage($user.id, currentSessionId, currentCharacterName, 'user', text, currentVoiceId);
 		}
 
 		// Send to tutor
@@ -657,28 +667,14 @@
 			{/if}
 
 			{#if status === 'idle'}
-				{@const voiceOptions = [
-					{ id: 'sage', label: 'Rachel', btn: 'bg-pink-400 hover:bg-pink-500 shadow-pink-400/20' },
-					{ id: 'echo', label: 'Sh', btn: 'bg-teal-400 hover:bg-teal-500 shadow-teal-400/20' },
-					{ id: 'verse', label: 'Arnold', btn: 'bg-emerald-400 hover:bg-emerald-500 shadow-emerald-400/20' },
-					{ id: 'marin', label: 'Marin', btn: 'bg-violet-400 hover:bg-violet-500 shadow-violet-400/20' },
-					{ id: 'alloy', label: 'Alloy', btn: 'bg-amber-400 hover:bg-amber-500 shadow-amber-400/20' },
-					{ id: 'ash', label: 'Ash', btn: 'bg-stone-400 hover:bg-stone-500 shadow-stone-400/20' },
-					{ id: 'ballad', label: 'Ballad', btn: 'bg-sky-400 hover:bg-sky-500 shadow-sky-400/20' },
-					{ id: 'coral', label: 'Hannah', btn: 'bg-coral hover:bg-[#e07360] shadow-[#eb8374]/20' },
-					{ id: 'shimmer', label: 'Shimmer', btn: 'bg-fuchsia-400 hover:bg-fuchsia-500 shadow-fuchsia-400/20' },
-					{ id: 'cedar', label: 'Cedar', btn: 'bg-green-600 hover:bg-green-700 shadow-green-600/20' }
-				]}
-				<div class="space-y-3">
-					{#each voiceOptions as { id, label, btn }}
+				<p class="text-stone-600 text-sm mb-3">Let's start with</p>
+				<div class="grid grid-cols-2 gap-2">
+					{#each voiceOptions as { id, label, emoji, mbti, btn }}
 						<button
 							onclick={() => connect(id)}
-							class="w-full py-3 rounded-xl {btn} text-white font-medium text-sm transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+							class="py-3 rounded-xl {btn} text-white font-medium text-sm transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-1.5"
 						>
-							Let's start with {label}
-							<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
-							</svg>
+							{label} {emoji} ({mbti})
 						</button>
 					{/each}
 				</div>
@@ -703,30 +699,16 @@
 					</div>
 				</div>
 			{:else if status === 'error'}
-				{@const errorVoiceOptions = [
-					{ id: 'sage', label: 'Rachel', btn: 'bg-pink-400 hover:bg-pink-500 shadow-pink-400/20' },
-					{ id: 'echo', label: 'Sh', btn: 'bg-teal-400 hover:bg-teal-500 shadow-teal-400/20' },
-					{ id: 'verse', label: 'Arnold', btn: 'bg-emerald-400 hover:bg-emerald-500 shadow-emerald-400/20' },
-					{ id: 'marin', label: 'Marin', btn: 'bg-violet-400 hover:bg-violet-500 shadow-violet-400/20' },
-					{ id: 'alloy', label: 'Alloy', btn: 'bg-amber-400 hover:bg-amber-500 shadow-amber-400/20' },
-					{ id: 'ash', label: 'Ash', btn: 'bg-stone-400 hover:bg-stone-500 shadow-stone-400/20' },
-					{ id: 'ballad', label: 'Ballad', btn: 'bg-sky-400 hover:bg-sky-500 shadow-sky-400/20' },
-					{ id: 'coral', label: 'Hannah', btn: 'bg-coral hover:bg-[#e07360] shadow-[#eb8374]/20' },
-					{ id: 'shimmer', label: 'Shimmer', btn: 'bg-fuchsia-400 hover:bg-fuchsia-500 shadow-fuchsia-400/20' },
-					{ id: 'cedar', label: 'Cedar', btn: 'bg-green-600 hover:bg-green-700 shadow-green-600/20' }
-				]}
 				<div class="space-y-4">
 					<p class="text-stone-600 text-sm">Connection was lost or an error occurred. Choose a voice to start a new conversation.</p>
-					<div class="space-y-2 max-h-[280px] overflow-y-auto">
-						{#each errorVoiceOptions as { id, label, btn }}
+					<p class="text-stone-500 text-xs">Let's start with</p>
+					<div class="grid grid-cols-2 gap-2 max-h-[320px] overflow-y-auto">
+						{#each voiceOptions as { id, label, emoji, mbti, btn }}
 							<button
 								onclick={() => connect(id)}
-								class="w-full py-2.5 rounded-xl {btn} text-white font-medium text-sm transition-all flex items-center justify-center gap-2"
+								class="py-2.5 rounded-xl {btn} text-white font-medium text-sm transition-all flex items-center justify-center gap-1.5"
 							>
-								Let's start with {label}
-								<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
-								</svg>
+								{label} {emoji} ({mbti})
 							</button>
 						{/each}
 					</div>
@@ -816,7 +798,7 @@
 										onclick={sendVoiceMessage}
 										class="flex-1 py-3 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-medium text-sm transition-colors flex items-center justify-center gap-2"
 									>
-										Send to {currentCharacterName}
+										Send to {currentCharacterName} {currentCharacterEmoji}{currentCharacterMbti ? ` (${currentCharacterMbti})` : ''}
 										<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
 										</svg>
@@ -892,14 +874,20 @@
 						{:else}
 							<div class="space-y-2">
 								{#each historySessions as sess}
+									{@const char = sess.character_voice_id ? getCharacter(sess.character_voice_id) : { label: sess.character_name, emoji: '', personality: '' }}
 									<button
 										onclick={() => viewSession(sess)}
 										class="w-full text-left p-4 rounded-xl border border-stone-200 hover:bg-stone-50 hover:border-stone-300 transition-colors"
 									>
 										<div class="flex justify-between items-start">
 											<div>
-												<span class="font-medium text-stone-700">{sess.character_name}</span>
+												<span class="font-medium text-stone-700">{char.label}{char.emoji ? ` ${char.emoji}` : ''}{char.mbti ? ` (${char.mbti})` : ''}</span>
 												<span class="text-stone-400 text-xs ml-2">{sess.message_count} messages</span>
+												{#if char.mbtiDescription}
+													<p class="text-stone-500 text-xs mt-1 truncate max-w-[200px]" title={char.mbtiDescription}>{char.mbtiDescription}</p>
+												{:else if char.personality}
+													<p class="text-stone-500 text-xs mt-1 truncate max-w-[200px]" title={char.personality}>{char.personality}</p>
+												{/if}
 											</div>
 											<span class="text-xs text-stone-500">{new Date(sess.started_at).toLocaleString()}</span>
 										</div>
@@ -910,14 +898,22 @@
 					</div>
 				</div>
 			{:else if historyView === 'detail'}
+				{@const detailChar = selectedSession?.character_voice_id ? getCharacter(selectedSession.character_voice_id) : { label: selectedSession?.character_name ?? 'Tutor', emoji: '', mbti: '', personality: '', mbtiDescription: '' }}
 				<div class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden">
-					<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between">
-						<button onclick={backToHistoryList} class="text-sm text-stone-500 hover:text-stone-700 flex items-center gap-1">
-							<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
-							Back
-						</button>
-						<h2 class="text-sm font-semibold text-stone-700">{selectedSession?.character_name} · {new Date(selectedSession?.started_at).toLocaleString()}</h2>
-						<div></div>
+					<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex flex-col gap-1">
+						<div class="flex items-center justify-between">
+							<button onclick={backToHistoryList} class="text-sm text-stone-500 hover:text-stone-700 flex items-center gap-1">
+								<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+								Back
+							</button>
+							<h2 class="text-sm font-semibold text-stone-700">{detailChar.label}{detailChar.emoji ? ` ${detailChar.emoji}` : ''}{detailChar.mbti ? ` (${detailChar.mbti})` : ''} · {new Date(selectedSession?.started_at).toLocaleString()}</h2>
+							<div></div>
+						</div>
+						{#if detailChar.mbtiDescription}
+							<p class="text-stone-500 text-xs" title={detailChar.mbtiDescription}>MBTI: {detailChar.mbtiDescription}</p>
+						{:else if detailChar.personality}
+							<p class="text-stone-500 text-xs" title={detailChar.personality}>AI personality: {detailChar.personality}</p>
+						{/if}
 					</div>
 					<div class="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
 						{#if historyLoading}
@@ -928,7 +924,7 @@
 							{#each historyMessages as msg}
 								<div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'}">
 									<div class="max-w-[85%] rounded-2xl px-4 py-3 text-sm {msg.role === 'user' ? 'bg-rose-50 text-stone-900 border border-rose-100' : 'bg-stone-50 text-stone-800 border border-stone-100'}">
-										<span class="text-xs font-medium text-stone-600 block mb-1.5">{msg.role === 'user' ? 'You' : selectedSession?.character_name}</span>
+										<span class="text-xs font-medium text-stone-600 block mb-1.5">{msg.role === 'user' ? 'You' : `${detailChar.label}${detailChar.emoji ? ` ${detailChar.emoji}` : ''}${detailChar.mbti ? ` (${detailChar.mbti})` : ''}`}</span>
 										<p class="whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
 									</div>
 								</div>
@@ -1005,7 +1001,7 @@
 										: 'bg-stone-50 text-stone-800 border border-stone-100'}"
 								>
 									<span class="text-xs font-medium text-stone-600 mb-1.5 flex items-center gap-1.5">
-										{msg.role === 'user' ? 'You' : currentCharacterName}
+										{msg.role === 'user' ? 'You' : currentCharacterName} {msg.role === 'assistant' ? `${currentCharacterEmoji}${currentCharacterMbti ? ` (${currentCharacterMbti})` : ''}` : ''}
 										{#if showSpeaking}
 											<span class="speaking-animation inline-flex items-center gap-0.5">
 												<span class="w-1 h-1 bg-emerald-500 rounded-full animate-bounce" style="animation-delay: 0ms"></span>
@@ -1025,3 +1021,11 @@
 		</div>
 	</main>
 </div>
+
+<!-- 온보딩 모달: 로그인 후 프로필/동의 미완료 시 표시 -->
+{#if $user && !$authLoading && !$onboardingLoading && !$onboardingComplete}
+	<OnboardingModal
+		userId={$user.id}
+		onComplete={() => checkOnboardingStatus($user.id)}
+	/>
+{/if}

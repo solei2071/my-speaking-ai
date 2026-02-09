@@ -172,10 +172,22 @@ export const CHARACTERS = {
 
 export { MBTI_DESCRIPTIONS };
 
+// Cache for memoization
+const characterCache = new Map();
+
 /** Get character by id, or fallback to alloy. */
 export function getCharacter(charId) {
+	// Return cached result if available
+	if (characterCache.has(charId)) {
+		return characterCache.get(charId);
+	}
+
+	// Compute and cache
 	const c = CHARACTERS[charId] ?? CHARACTERS.alloy;
-	return { ...c, mbtiDescription: MBTI_DESCRIPTIONS[c.mbti] ?? '' };
+	const result = { ...c, mbtiDescription: MBTI_DESCRIPTIONS[c.mbti] ?? '' };
+	characterCache.set(charId, result);
+
+	return result;
 }
 
 /** Get the OpenAI voice id for a character (for API calls). */

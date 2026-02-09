@@ -178,18 +178,16 @@
 	function updateStreamingMessage(text) {
 		if (!text) return;
 
-		const lastMsg = conversationLog[conversationLog.length - 1];
+		const lastIndex = conversationLog.length - 1;
+		const lastMsg = conversationLog[lastIndex];
 
 		// If last message is from user, add new streaming assistant message
 		if (lastMsg?.role === 'user') {
-			conversationLog = [...conversationLog, { role: 'assistant', text, isStreaming: true }];
+			conversationLog.push({ role: 'assistant', text, isStreaming: true });
 		}
-		// If last message is streaming assistant, update it
+		// If last message is streaming assistant, update it in-place
 		else if (lastMsg?.isStreaming) {
-			conversationLog = [
-				...conversationLog.slice(0, -1),
-				{ role: 'assistant', text, isStreaming: true }
-			];
+			conversationLog[lastIndex] = { role: 'assistant', text, isStreaming: true };
 		}
 		// If no messages or last is completed assistant (shouldn't happen normally)
 		else if (!lastMsg || lastMsg.role === 'assistant') {
@@ -197,7 +195,7 @@
 			const userCount = conversationLog.filter((m) => m.role === 'user').length;
 			const assistantCount = conversationLog.filter((m) => m.role === 'assistant').length;
 			if (userCount > assistantCount) {
-				conversationLog = [...conversationLog, { role: 'assistant', text, isStreaming: true }];
+				conversationLog.push({ role: 'assistant', text, isStreaming: true });
 			}
 		}
 

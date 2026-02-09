@@ -6,6 +6,7 @@
 	import { getCharacter, voiceOptions } from '$lib/characters.js';
 	import OnboardingModal from '$lib/OnboardingModal.svelte';
 	import { checkOnboardingStatus } from '$lib/profile.js';
+	import { withTimeout } from '$lib/utils/timeout.js';
 	let status = $state('idle');
 	let currentSessionId = $state(null);
 	let error = $state(null);
@@ -284,11 +285,15 @@
 		currentSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
 		try {
-			const res = await fetch('/api/realtime-token', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ voice })
-			});
+			const res = await withTimeout(
+				fetch('/api/realtime-token', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ voice })
+				}),
+				10000,
+				'토큰 요청'
+			);
 			const data = await res.json();
 
 			if (!res.ok) {
@@ -419,7 +424,9 @@
 			initSpeechRecognition();
 		} catch (e) {
 			status = 'error';
-			error = e?.message || 'Connection failed.';
+			error = e.message.includes('timed out')
+				? '연결이 너무 오래 걸립니다. 인터넷 연결을 확인해주세요.'
+				: e?.message || 'Connection failed.';
 		}
 	}
 

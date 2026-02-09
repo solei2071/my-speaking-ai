@@ -1,5 +1,6 @@
 import { supabase } from './supabase.js';
 import { writable } from 'svelte/store';
+import { validateOrThrow, onboardingSchema } from './validation/schemas.js';
 
 // 온보딩(프로필+동의) 완료 여부 store
 export const onboardingComplete = writable(false);
@@ -63,12 +64,8 @@ export async function checkOnboardingStatus(userId) {
 		]);
 
 		const hasProfile = !!profile;
-		const hasTerms = agreements.some(
-			(a) => a.agreement_type === 'terms_of_service' && a.agreed
-		);
-		const hasPrivacy = agreements.some(
-			(a) => a.agreement_type === 'privacy_policy' && a.agreed
-		);
+		const hasTerms = agreements.some((a) => a.agreement_type === 'terms_of_service' && a.agreed);
+		const hasPrivacy = agreements.some((a) => a.agreement_type === 'privacy_policy' && a.agreed);
 
 		const complete = hasProfile && hasTerms && hasPrivacy;
 		onboardingComplete.set(complete);
@@ -91,23 +88,27 @@ export async function checkOnboardingStatus(userId) {
  */
 export async function saveOnboarding(userId, displayName, phone) {
 	try {
+		// Validate all inputs upfront
+		const validated = validateOrThrow(onboardingSchema, { userId, displayName, phone });
+
+		// Track all errors for comprehensive feedback
+		const errors = [];
+
 		// 1. 프로필 저장 (upsert)
-		const { error: profileError } = await supabase
-			.from('user_profiles')
-			.upsert({
-				id: userId,
-				display_name: displayName,
-				phone: phone
-			});
+		const { error: profileError } = await supabase.from('user_profiles').upsert({
+			id: validated.userId,
+			display_name: validated.displayName,
+			phone: validated.phone
+		});
 
 		if (profileError) {
-			return { success: false, error: `프로필 저장 실패: ${profileError.message}` };
+			errors.push(`프로필 저장 실패: ${profileError.message}`);
 		}
 
 		// 2. 이용약관 동의 저장
 		const { error: termsError } = await supabase.from('user_agreements').upsert(
 			{
-				user_id: userId,
+				user_id: validated.userId,
 				agreement_type: 'terms_of_service',
 				agreed: true,
 				agreement_version: AGREEMENT_VERSION
@@ -116,13 +117,13 @@ export async function saveOnboarding(userId, displayName, phone) {
 		);
 
 		if (termsError) {
-			return { success: false, error: `이용약관 동의 저장 실패: ${termsError.message}` };
+			errors.push(`이용약관 동의 저장 실패: ${termsError.message}`);
 		}
 
 		// 3. 개인정보 처리방침 동의 저장
 		const { error: privacyError } = await supabase.from('user_agreements').upsert(
 			{
-				user_id: userId,
+				user_id: validated.userId,
 				agreement_type: 'privacy_policy',
 				agreed: true,
 				agreement_version: AGREEMENT_VERSION
@@ -131,12 +132,21 @@ export async function saveOnboarding(userId, displayName, phone) {
 		);
 
 		if (privacyError) {
-			return { success: false, error: `개인정보 동의 저장 실패: ${privacyError.message}` };
+			errors.push(`개인정보 동의 저장 실패: ${privacyError.message}`);
+		}
+
+		// If any errors occurred, report them
+		if (errors.length > 0) {
+			return { success: false, error: errors.join('; ') };
 		}
 
 		onboardingComplete.set(true);
 		return { success: true };
 	} catch (e) {
-		return { success: false, error: e?.message || '저장 중 오류가 발생했습니다.' };
+		console.error('[Profile] Onboarding save error:', e);
+		return {
+			success: false,
+			error: e?.message || '저장 중 오류가 발생했습니다.'
+		};
 	}
 }

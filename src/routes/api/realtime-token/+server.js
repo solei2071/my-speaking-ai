@@ -1,5 +1,6 @@
 import { env } from '$env/dynamic/private';
 import { CHARACTERS, getCharacter, getVoiceForCharacter } from '$lib/characters.js';
+import { validateOrThrow, realtimeTokenRequestSchema } from '$lib/validation/schemas.js';
 
 const VALID_CHAR_IDS = Object.keys(CHARACTERS);
 
@@ -16,9 +17,16 @@ export async function POST({ request }) {
 	let charId = 'alloy';
 	try {
 		const body = await request.json();
-		const requested = body?.voice ?? body?.character;
-		if (requested && VALID_CHAR_IDS.includes(requested)) charId = requested;
-	} catch (_) {}
+		// Validate input
+		const validated = validateOrThrow(realtimeTokenRequestSchema, body);
+		const requested = validated.voice ?? validated.character;
+		if (requested && VALID_CHAR_IDS.includes(requested)) {
+			charId = requested;
+		}
+	} catch (e) {
+		// Log but continue with default (graceful degradation)
+		console.warn('[Token API] Invalid request body, using default:', e.message);
+	}
 
 	const character = getCharacter(charId);
 	const voice = getVoiceForCharacter(charId);
@@ -74,10 +82,12 @@ ${baseInstructions}`
 
 		if (!response.ok) {
 			const err = await response.text();
-			return new Response(
-				JSON.stringify({ error: 'Failed to get token', details: err }),
-				{ status: response.status, headers: { 'Content-Type': 'application/json' } }
-			);
+			console.error('[Token API] OpenAI error:', err);
+			// Don't expose internal error details to client
+			return new Response(JSON.stringify({ error: '토큰 생성 실패' }), {
+				status: response.status,
+				headers: { 'Content-Type': 'application/json' }
+			});
 		}
 
 		const data = await response.json();
@@ -85,17 +95,12 @@ ${baseInstructions}`
 			headers: { 'Content-Type': 'application/json' }
 		});
 	} catch (e) {
-		const msg = e?.message ?? 'Unknown error';
-		const cause = e?.cause?.message ?? e?.cause;
-		const isNetworkError = msg === 'fetch failed' || msg?.includes('timeout') || msg?.includes('Timeout');
-		const hint = isNetworkError
-			? 'Cannot reach api.openai.com. Check: 1) Internet connection 2) Firewall/VPN blocking OpenAI 3) Try different network 4) Slow network - try again.'
-			: null;
+		console.error('[Token API] Server error:', e);
+		// Don't expose internal error details to client
 		return new Response(
 			JSON.stringify({
-				error: 'Server error',
-				details: cause ? `${msg} (${cause})` : msg,
-				hint
+				error: '토큰 생성 실패',
+				message: '다시 시도하거나 네트워크 연결을 확인해주세요'
 			}),
 			{ status: 500, headers: { 'Content-Type': 'application/json' } }
 		);

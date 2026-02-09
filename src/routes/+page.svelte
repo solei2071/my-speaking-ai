@@ -1,4 +1,5 @@
 <script>
+	import { onDestroy } from 'svelte';
 	import { RealtimeAgent, RealtimeSession } from '@openai/agents-realtime';
 	import { user, authLoading, signOut, onboardingComplete, onboardingLoading } from '$lib/auth.js';
 	import { saveMessage, fetchSessions, fetchSessionMessages } from '$lib/conversation.js';
@@ -33,12 +34,86 @@
 	// Auto-send timer
 	let autoSendTimer = $state(null);
 
+	// Cleanup tracking
+	let cleanupFns = [];
+	let wsMessageHandler = null;
+
 	// History view
 	let historySessions = $state([]);
 	let historyView = $state(null);
 	let selectedSession = $state(null);
 	let historyMessages = $state([]);
 	let historyLoading = $state(false);
+
+	// Cleanup on component unmount
+	onDestroy(() => {
+		console.log('[Cleanup] Component unmounting, cleaning up resources...');
+
+		// 1. Clear timer
+		if (autoSendTimer) {
+			clearTimeout(autoSendTimer);
+			autoSendTimer = null;
+		}
+
+		// 2. Stop and cleanup Speech Recognition
+		if (recognition) {
+			try {
+				recognition.stop();
+				recognition.onresult = null;
+				recognition.onerror = null;
+				recognition.onend = null;
+			} catch (e) {
+				console.warn('[Cleanup] Speech recognition cleanup failed:', e);
+			}
+			recognition = null;
+		}
+
+		// 3. Remove WebSocket listener
+		if (session?.transport && wsMessageHandler) {
+			const ws = session.transport.ws || session.transport.socket;
+			if (ws?.removeEventListener) {
+				ws.removeEventListener('message', wsMessageHandler);
+				console.log('[Cleanup] WebSocket listener removed');
+			}
+		}
+
+		// 4. Close session
+		if (session) {
+			try {
+				session.close();
+				console.log('[Cleanup] Session closed');
+			} catch (e) {
+				console.warn('[Cleanup] Session close failed:', e);
+			}
+			session = null;
+		}
+
+		// 5. Run all tracked cleanup functions
+		cleanupFns.forEach((fn) => {
+			try {
+				fn();
+			} catch (e) {
+				console.warn('[Cleanup] Cleanup function failed:', e);
+			}
+		});
+		cleanupFns = [];
+
+		console.log('[Cleanup] All resources cleaned up');
+	});
+
+	// Helper function to add cleanable event listeners
+	function addCleanableListener(target, event, handler) {
+		if (target?.on) {
+			target.on(event, handler);
+			cleanupFns.push(() => {
+				try {
+					target.off?.(event, handler);
+				} catch (e) {
+					console.warn('[Cleanup] Failed to remove listener:', e);
+				}
+			});
+		}
+	}
 
 	function handleServerEvent(event) {
 		if (!event?.type) return;
@@ -236,14 +311,20 @@
 			});
 
 			const realtimeSession = new RealtimeSession(agent);
-			realtimeSession.on('history_updated', (history) => updateConversationLog(history));
-			realtimeSession.on('error', (e) => {
+
+			// Use cleanable listeners for proper cleanup
+			addCleanableListener(realtimeSession, 'history_updated', (history) =>
+				updateConversationLog(history)
+			);
+
+			addCleanableListener(realtimeSession, 'error', (e) => {
 				error = e?.error?.message ?? String(e?.error ?? e);
 				status = 'error';
 				session = null;
 				isSpeaking = false;
 			});
-			realtimeSession.on('audio_done', () => {
+
+			addCleanableListener(realtimeSession, 'audio_done', () => {
 				isSpeaking = false;
 				streamingMessageId = null;
 				// Mark streaming message as complete
@@ -264,20 +345,23 @@
 						);
 				}
 			});
-			realtimeSession.transport?.on?.('connection_change', (connStatus) => {
-				if (connStatus === 'disconnected') {
-					error = 'Connection lost. Please start a new conversation.';
-					status = 'error';
-					session = null;
-					isSpeaking = false;
-				}
-			});
+
+			if (realtimeSession.transport) {
+				addCleanableListener(realtimeSession.transport, 'connection_change', (connStatus) => {
+					if (connStatus === 'disconnected') {
+						error = 'Connection lost. Please start a new conversation.';
+						status = 'error';
+						session = null;
+						isSpeaking = false;
+					}
+				});
+			}
 
 			// Listen to various events for real-time streaming
-			realtimeSession.on('server_event', (event) => handleServerEvent(event));
-			realtimeSession.on('message', (event) => handleServerEvent(event));
-			realtimeSession.on('response', (event) => handleServerEvent(event));
-			realtimeSession.on('transcript', (data) => {
+			addCleanableListener(realtimeSession, 'server_event', (event) => handleServerEvent(event));
+			addCleanableListener(realtimeSession, 'message', (event) => handleServerEvent(event));
+			addCleanableListener(realtimeSession, 'response', (event) => handleServerEvent(event));
+			addCleanableListener(realtimeSession, 'transcript', (data) => {
 				if (data?.text || data?.delta) {
 					isSpeaking = true;
 					streamingText += data.delta || '';
@@ -287,7 +371,11 @@
 			});
 
 			// Also try transport events
-			realtimeSession.transport?.on?.('message', (event) => handleServerEvent(event));
+			if (realtimeSession.transport) {
+				addCleanableListener(realtimeSession.transport, 'message', (event) =>
+					handleServerEvent(event)
+				);
+			}
 
 			await realtimeSession.connect({ apiKey: ephemeralKey });
 
@@ -300,12 +388,16 @@
 					const ws = transport?.ws || transport?.socket || transport?._ws || transport?.websocket;
 					console.log('[Debug] WebSocket found:', !!ws);
 					if (ws && ws.addEventListener) {
-						ws.addEventListener('message', (event) => {
+						// Create trackable message handler
+						wsMessageHandler = (event) => {
 							try {
 								const data = JSON.parse(event.data);
 								handleServerEvent(data);
-							} catch (_) {}
-						});
+							} catch (e) {
+								console.warn('[WebSocket] Parse error:', e);
+							}
+						};
+						ws.addEventListener('message', wsMessageHandler);
 						console.log('[Debug] WebSocket message listener added');
 					}
 				} catch (e) {
@@ -540,7 +632,9 @@
 			if (isListening && recognition) {
 				try {
 					recognition.start();
-				} catch (_) {}
+				} catch (e) {
+					console.warn('[Speech] Auto-restart failed:', e);
+				}
 			}
 		};
 	}
@@ -556,15 +650,17 @@
 		// Stop any existing recognition first
 		try {
 			recognition.stop();
-		} catch (_) {}
+		} catch (e) {
+			console.warn('[Speech] Stop failed (may already be stopped):', e);
+		}
 
 		// Start fresh after a brief delay
 		setTimeout(() => {
 			isListening = true;
 			try {
 				recognition.start();
-			} catch (_) {
-				// Already started
+			} catch (e) {
+				console.warn('[Speech] Start failed (may already be started):', e);
 			}
 		}, 50);
 	}
@@ -578,7 +674,9 @@
 		if (recognition) {
 			try {
 				recognition.stop();
-			} catch (_) {}
+			} catch (e) {
+				console.warn('[Speech] Stop failed:', e);
+			}
 		}
 	}
 
@@ -591,7 +689,9 @@
 		if (recognition) {
 			try {
 				recognition.stop();
-			} catch (_) {}
+			} catch (e) {
+				console.warn('[Speech] Stop before send failed:', e);
+			}
 		}
 		isListening = false;
 

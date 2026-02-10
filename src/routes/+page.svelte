@@ -1,5 +1,6 @@
 <script>
 	import { onDestroy } from 'svelte';
+	import { resolveRoute } from '$app/navigation';
 	import { RealtimeAgent, RealtimeSession } from '@openai/agents-realtime';
 	import { user, authLoading, signOut, onboardingComplete, onboardingLoading } from '$lib/auth.js';
 	import { saveMessage, fetchSessions, fetchSessionMessages } from '$lib/conversation.js';
@@ -797,6 +798,12 @@
 						>
 							{historyView ? '← Back' : 'History'}
 						</button>
+						<a
+							href={resolveRoute('/analytics')}
+							class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors"
+						>
+							Analytics
+						</a>
 						<button
 							onclick={() => signOut()}
 							class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors"
@@ -808,13 +815,13 @@
 			{:else}
 				<div class="mb-6 flex gap-2">
 					<a
-						href="/login"
+						href={resolveRoute('/login')}
 						class="flex-1 py-2.5 text-center rounded-xl border border-stone-200 text-stone-600 hover:bg-stone-50 text-sm font-medium transition-colors"
 					>
 						Log in
 					</a>
 					<a
-						href="/signup"
+						href={resolveRoute('/signup')}
 						class="flex-1 py-2.5 text-center rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-sm font-medium transition-colors"
 					>
 						Sign up

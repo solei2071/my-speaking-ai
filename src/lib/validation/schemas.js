@@ -46,6 +46,16 @@ export const realtimeTokenRequestSchema = z.object({
 	character: z.string().max(50).optional()
 });
 
+// Analytics 스키마
+export const userIdSchema = z.object({
+	userId: z.string().uuid('잘못된 사용자 ID')
+});
+
+export const analyticsRequestSchema = z.object({
+	userId: z.string().uuid('잘못된 사용자 ID'),
+	period: z.enum(['daily', 'weekly', 'monthly', 'all']).optional()
+});
+
 // 헬퍼 함수
 export function validateOrThrow(schema, data) {
 	const result = schema.safeParse(data);

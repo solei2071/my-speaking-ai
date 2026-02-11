@@ -36,6 +36,12 @@
 	// Auto-send timer
 	let autoSendTimer = $state(null);
 
+	// Auto-send mode: 말이 끝나면 자동 전송
+	let autoSendEnabled = $state(false);
+	let autoSendDelay = 2000; // 침묵 후 자동 전송까지 대기 시간 (ms)
+	let autoSendCountdown = $state(0); // 카운트다운 표시용
+	let autoSendCountdownInterval = null;
+
 	// Cleanup tracking
 	let cleanupFns = [];
 
@@ -58,6 +64,7 @@
 
 	// Cleanup on component unmount
 	onDestroy(() => {
+		cancelAutoSendCountdown();
 		if (autoSendTimer) {
 			clearTimeout(autoSendTimer);
 			autoSendTimer = null;
@@ -329,6 +336,7 @@
 
 	function disconnect() {
 		stopListening();
+		cancelAutoSendCountdown();
 
 		if (autoSendTimer) {
 			clearTimeout(autoSendTimer);
@@ -489,8 +497,10 @@
 			finalTranscript = final;
 			liveTranscript = final + interim;
 
+			// "send it" 음성 명령 감지
 			const lowerText = liveTranscript.toLowerCase().trim();
 			if (lowerText.endsWith('send it') || lowerText.endsWith('send it.')) {
+				cancelAutoSendCountdown();
 				if (autoSendTimer) clearTimeout(autoSendTimer);
 				autoSendTimer = setTimeout(() => {
 					if (liveTranscript.trim()) {
@@ -506,6 +516,10 @@
 				if (autoSendTimer) {
 					clearTimeout(autoSendTimer);
 					autoSendTimer = null;
+				}
+				// Auto Send 모드: 말이 들어올 때마다 타이머 리셋
+				if (autoSendEnabled && liveTranscript.trim()) {
+					startAutoSendCountdown();
 				}
 			}
 		};
@@ -608,6 +622,51 @@
 	function clearTranscript() {
 		liveTranscript = '';
 		finalTranscript = '';
+		cancelAutoSendCountdown();
+	}
+
+	/** Auto Send 카운트다운 시작/리셋 */
+	function startAutoSendCountdown() {
+		// AI가 말하는 중에는 자동 전송하지 않음
+		if (isSpeaking) return;
+
+		cancelAutoSendCountdown();
+		autoSendCountdown = Math.ceil(autoSendDelay / 1000);
+
+		autoSendCountdownInterval = setInterval(() => {
+			autoSendCountdown -= 1;
+			if (autoSendCountdown <= 0) {
+				cancelAutoSendCountdown();
+			}
+		}, 1000);
+
+		autoSendTimer = setTimeout(() => {
+			cancelAutoSendCountdown();
+			if (liveTranscript.trim() && autoSendEnabled && !isSpeaking) {
+				sendVoiceMessage();
+			}
+		}, autoSendDelay);
+	}
+
+	/** Auto Send 카운트다운 취소 */
+	function cancelAutoSendCountdown() {
+		if (autoSendCountdownInterval) {
+			clearInterval(autoSendCountdownInterval);
+			autoSendCountdownInterval = null;
+		}
+		if (autoSendTimer) {
+			clearTimeout(autoSendTimer);
+			autoSendTimer = null;
+		}
+		autoSendCountdown = 0;
+	}
+
+	/** Auto Send 토글 */
+	function toggleAutoSend() {
+		autoSendEnabled = !autoSendEnabled;
+		if (!autoSendEnabled) {
+			cancelAutoSendCountdown();
+		}
 	}
 
 	async function loadHistory() {
@@ -893,7 +952,9 @@
 									<div>
 										<p class="text-emerald-700 font-medium text-sm">Listening...</p>
 										<p class="text-emerald-600/70 text-xs">
-											Speak naturally. Click send when done.
+											{autoSendEnabled
+												? 'Speak naturally. Auto-sending when you pause.'
+												: 'Speak naturally. Click send when done.'}
 										</p>
 									</div>
 								{:else}
@@ -929,6 +990,58 @@
 								</div>
 							{/if}
 
+							<!-- Auto Send 토글 -->
+							<div class="flex items-center justify-between px-1">
+								<label class="flex items-center gap-2 cursor-pointer select-none">
+									<button
+										onclick={toggleAutoSend}
+										class="relative w-10 h-5 rounded-full transition-colors duration-200 {autoSendEnabled
+											? 'bg-emerald-500'
+											: 'bg-stone-300'}"
+										role="switch"
+										aria-checked={autoSendEnabled}
+									>
+										<span
+											class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 {autoSendEnabled
+												? 'translate-x-5'
+												: 'translate-x-0'}"
+										></span>
+									</button>
+									<span
+										class="text-xs font-medium {autoSendEnabled
+											? 'text-emerald-700'
+											: 'text-stone-500'}"
+									>
+										Auto Send
+									</span>
+								</label>
+								{#if autoSendEnabled}
+									<span class="text-xs text-stone-400">
+										말이 끝나면 {autoSendDelay / 1000}초 후 자동 전송
+									</span>
+								{/if}
+							</div>
+
+							<!-- 카운트다운 표시 -->
+							{#if autoSendCountdown > 0 && autoSendEnabled}
+								<div
+									class="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl"
+								>
+									<div
+										class="w-5 h-5 rounded-full border-2 border-amber-500 border-t-transparent animate-spin"
+									></div>
+									<span class="text-xs font-medium text-amber-700">
+										{autoSendCountdown}초 후 자동 전송...
+									</span>
+									<button
+										onclick={cancelAutoSendCountdown}
+										class="ml-auto text-xs text-amber-600 hover:text-amber-800 font-medium"
+									>
+										취소
+									</button>
+								</div>
+							{/if}
+
 							<div class="flex gap-2">
 								<button
 									onclick={toggleMic}
@@ -939,7 +1052,7 @@
 									{isListening ? 'Stop mic' : 'Start mic'}
 								</button>
 
-								{#if liveTranscript.trim()}
+								{#if liveTranscript.trim() && !autoSendEnabled}
 									<button
 										onclick={sendVoiceMessage}
 										class="flex-1 py-3 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-medium text-sm transition-colors flex items-center justify-center gap-2"

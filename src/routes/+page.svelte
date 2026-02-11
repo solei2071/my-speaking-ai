@@ -6,7 +6,9 @@
 	import { user, authLoading, signOut, onboardingComplete, onboardingLoading } from '$lib/auth.js';
 	import { saveMessage, fetchSessions, fetchSessionMessages } from '$lib/conversation.js';
 	import { saveSentence, fetchSavedSentences, deleteSavedSentence } from '$lib/savedSentences.js';
-	import { getCharacter, voiceOptions } from '$lib/characters.js';
+	import { getCharacter, voiceOptionsSorted } from '$lib/characters.js';
+	import { getScenario, scenarioOptions } from '$lib/scenarios.js';
+	import { analyzeSpeech } from '$lib/pronunciation.js';
 	import OnboardingModal from '$lib/OnboardingModal.svelte';
 	import { checkOnboardingStatus } from '$lib/profile.js';
 	import { withTimeout } from '$lib/utils/timeout.js';
@@ -19,15 +21,25 @@
 	let currentCharacterMbti = $state('');
 	let currentVoiceId = $state(null);
 	let conversationLog = $state([]);
+	let selectedScenario = $state(null);
+	let showScenarioSelector = $state(false);
+
+	// Pronunciation feedback (only available with Web Speech API)
+	let pronunciationEnabled = $state(true);
+	let currentPronunciation = $state(null);
+	let pronunciationHistory = $state([]);
+	let speechStartTime = $state(0);
 	let logContainer = $state(null);
 	let textInput = $state('');
 	let inputMode = $state('voice');
+	let speechRecognitionSupported = $state(true);
 
 	// Speech recognition for live transcription
 	let recognition = $state(null);
 	let liveTranscript = $state('');
 	let finalTranscript = $state('');
 	let isListening = $state(false);
+	let isFirefox = $state(false);
 
 	// AI speaking state
 	let isSpeaking = $state(false);
@@ -38,7 +50,7 @@
 
 	// Auto-send mode: 말이 끝나면 자동 전송
 	let autoSendEnabled = $state(false);
-	let autoSendDelay = 2000; // 침묵 후 자동 전송까지 대기 시간 (ms)
+	let autoSendDelay = 1000; // 침묵 후 자동 전송까지 대기 시간 (ms)
 	let autoSendCountdown = $state(0); // 카운트다운 표시용
 	let autoSendCountdownInterval = null;
 
@@ -277,9 +289,12 @@
 			}
 
 			const character = getCharacter(voice);
+			const scenarioInstructions = selectedScenario
+				? `\n\nScenario focus: ${selectedScenario.instructions}`
+				: '';
 			const agent = new RealtimeAgent({
 				name: character.label,
-				instructions: `You are ${character.label}, a friendly English conversation teacher for intermediate learners. ${character.personality}`
+				instructions: `You are ${character.label}, a friendly English conversation teacher for intermediate learners. ${character.personality}${scenarioInstructions}`
 			});
 
 			const realtimeSession = new RealtimeSession(agent);
@@ -321,14 +336,34 @@
 			currentCharacterMbti = char.mbti ?? '';
 			currentVoiceId = voice;
 			status = 'connected';
-			inputMode = 'voice';
-			if (realtimeSession.muted !== null) realtimeSession.mute(true);
-			initSpeechRecognition();
+
+			// Try to initialize speech recognition, fallback to text mode if not supported
+			const speechSupported = initSpeechRecognition();
+			inputMode = speechSupported ? 'voice' : 'text';
+
+			// For browsers without Web Speech API (e.g., Firefox), use RealtimeSession's native voice input
+			// For browsers with Web Speech API (Chrome, Edge, Safari), mute RealtimeSession and use Web Speech
+			if (realtimeSession.muted !== null) {
+				if (speechSupported) {
+					realtimeSession.mute(true); // Use Web Speech API for transcription
+				} else {
+					realtimeSession.mute(false); // Use RealtimeSession's native voice input
+					inputMode = 'voice'; // Enable voice mode even without Web Speech API
+				}
+			}
 		} catch (e) {
 			status = 'error';
-			error = e.message.includes('timed out')
-				? '연결이 너무 오래 걸립니다. 인터넷 연결을 확인해주세요.'
-				: e?.message || 'Connection failed.';
+			const errorMsg = e?.message || '';
+			if (errorMsg.includes('timed out')) {
+				error = '연결이 너무 오래 걸립니다. 인터넷 연결을 확인해주세요.';
+			} else if (errorMsg.includes('API key') || errorMsg.includes('Unauthorized')) {
+				error = 'API 키 오류입니다. 설정을 확인해주세요.';
+			} else if (errorMsg.includes('quota') || errorMsg.includes('limit')) {
+				error = 'API 사용량 한도를 초과했습니다. 잠시 후 다시 시도해주세요.';
+			} else {
+				error = errorMsg || '연결에 실패했습니다. 다시 시도해주세요.';
+			}
+			console.error('Connection error:', e);
 		}
 	}
 
@@ -410,8 +445,17 @@
 
 	function setInputMode(mode) {
 		inputMode = mode;
-		if (session?.muted !== null) session.mute(true);
-		if (mode === 'text') {
+
+		if (mode === 'voice') {
+			// If Web Speech API is supported, use it (Chrome, Edge, Safari)
+			if (speechRecognitionSupported) {
+				if (session?.muted !== null) session.mute(true);
+			} else {
+				// If not supported (Firefox), use RealtimeSession's native voice input
+				if (session?.muted !== null) session.mute(false);
+			}
+		} else if (mode === 'text') {
+			if (session?.muted !== null) session.mute(true);
 			stopListening();
 			liveTranscript = '';
 			finalTranscript = '';
@@ -419,6 +463,17 @@
 	}
 
 	function toggleMic() {
+		// For browsers without Web Speech API (Firefox), control RealtimeSession mute
+		if (!speechRecognitionSupported) {
+			if (session?.muted !== null) {
+				const newMutedState = !session.muted;
+				session.mute(newMutedState);
+				isListening = !newMutedState;
+			}
+			return;
+		}
+
+		// For browsers with Web Speech API
 		if (isListening) {
 			stopListening();
 		} else {
@@ -471,12 +526,22 @@
 	}
 
 	function initSpeechRecognition() {
-		if (typeof window === 'undefined') return;
+		if (typeof window === 'undefined') return false;
+
+		// Detect Firefox
+		isFirefox =
+			typeof window !== 'undefined' && navigator.userAgent.toLowerCase().includes('firefox');
+
 		const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 		if (!SpeechRecognition) {
-			error = 'Speech recognition not supported in this browser. Please use Chrome.';
-			return;
+			// Auto-switch to text mode if speech recognition is not supported
+			speechRecognitionSupported = false;
+			inputMode = 'text';
+			console.warn('Speech recognition not available. Switched to text mode.');
+			return false;
 		}
+
+		speechRecognitionSupported = true;
 
 		recognition = new SpeechRecognition();
 		recognition.continuous = true;
@@ -486,16 +551,44 @@
 		recognition.onresult = (event) => {
 			let interim = '';
 			let final = finalTranscript;
+			let confidenceSum = 0;
+			let confidenceCount = 0;
+			const wordResults = [];
+
 			for (let i = event.resultIndex; i < event.results.length; i++) {
-				const transcript = event.results[i][0].transcript;
+				const result = event.results[i][0];
+				const transcript = result.transcript;
+				const confidence = result.confidence || 0;
+
 				if (event.results[i].isFinal) {
 					final += transcript + ' ';
+					confidenceSum += confidence;
+					confidenceCount++;
+
+					// Store word-level results for pronunciation analysis
+					const words = transcript.trim().split(/\s+/);
+					words.forEach((word) => {
+						wordResults.push({ word, confidence });
+					});
 				} else {
 					interim += transcript;
 				}
 			}
 			finalTranscript = final;
 			liveTranscript = final + interim;
+
+			// Analyze pronunciation if enabled and we have final results
+			if (pronunciationEnabled && confidenceCount > 0 && final.trim()) {
+				try {
+					const avgConfidence = confidenceSum / confidenceCount;
+					const duration = Date.now() - speechStartTime;
+					const analysis = analyzeSpeech(final.trim(), avgConfidence, duration, wordResults);
+					currentPronunciation = analysis;
+				} catch (e) {
+					console.warn('Pronunciation analysis failed:', e);
+					currentPronunciation = null;
+				}
+			}
 
 			// "send it" 음성 명령 감지
 			const lowerText = liveTranscript.toLowerCase().trim();
@@ -525,8 +618,15 @@
 		};
 
 		recognition.onerror = (event) => {
-			if (event.error !== 'no-speech' && event.error !== 'aborted') {
-				console.error('Speech recognition error:', event.error);
+			const err = event.error;
+			if (err === 'not-allowed' || err === 'service-not-allowed') {
+				error = 'Microphone access denied. Please allow microphone access and refresh the page.';
+				isListening = false;
+			} else if (err === 'network') {
+				error = 'Network error. Please check your internet connection.';
+				isListening = false;
+			} else if (err !== 'no-speech' && err !== 'aborted') {
+				console.error('Speech recognition error:', err);
 			}
 		};
 
@@ -539,14 +639,34 @@
 				}
 			}
 		};
+
+		return true;
 	}
 
 	function startListening() {
-		if (!recognition) initSpeechRecognition();
+		// For browsers without Web Speech API (Firefox), unmute RealtimeSession
+		if (!speechRecognitionSupported) {
+			if (session?.muted !== null) {
+				session.mute(false);
+				isListening = true;
+			}
+			return;
+		}
+
+		// For browsers with Web Speech API
+		if (!recognition) {
+			const supported = initSpeechRecognition();
+			if (!supported) {
+				console.warn('Cannot start listening: Speech recognition not supported');
+				return;
+			}
+		}
 		if (!recognition) return;
 
 		finalTranscript = '';
 		liveTranscript = '';
+		speechStartTime = Date.now();
+		currentPronunciation = null;
 
 		try {
 			recognition.stop();
@@ -570,6 +690,16 @@
 			clearTimeout(autoSendTimer);
 			autoSendTimer = null;
 		}
+
+		// For browsers without Web Speech API (Firefox), mute RealtimeSession
+		if (!speechRecognitionSupported) {
+			if (session?.muted !== null) {
+				session.mute(true);
+			}
+			return;
+		}
+
+		// For browsers with Web Speech API
 		if (recognition) {
 			try {
 				recognition.stop();
@@ -596,7 +726,14 @@
 		liveTranscript = '';
 		finalTranscript = '';
 
-		conversationLog = [...conversationLog, { role: 'user', text }];
+		// Include pronunciation data in message
+		const messageData = { role: 'user', text };
+		if (pronunciationEnabled && currentPronunciation) {
+			messageData.pronunciation = currentPronunciation;
+			pronunciationHistory = [...pronunciationHistory, currentPronunciation];
+		}
+
+		conversationLog = [...conversationLog, messageData];
 		requestAnimationFrame(() => {
 			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
 		});
@@ -794,19 +931,24 @@
 					</div>
 				</div>
 			{:else}
-				<div class="mb-6 flex gap-2">
-					<a
-						href={resolveRoute('/login')}
-						class="flex-1 py-2.5 text-center rounded-xl border border-stone-200 text-stone-600 hover:bg-stone-50 text-sm font-medium transition-colors"
-					>
-						Log in
-					</a>
-					<a
-						href={resolveRoute('/signup')}
-						class="flex-1 py-2.5 text-center rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-sm font-medium transition-colors"
-					>
-						Sign up
-					</a>
+				<div class="mb-3">
+					<div class="flex gap-2">
+						<a
+							href={resolveRoute('/login')}
+							class="flex-1 py-2.5 text-center rounded-xl border border-stone-200 text-stone-600 hover:bg-stone-50 text-sm font-medium transition-colors"
+						>
+							Log in
+						</a>
+						<a
+							href={resolveRoute('/signup')}
+							class="flex-1 py-2.5 text-center rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-sm font-medium transition-colors"
+						>
+							Sign up
+						</a>
+					</div>
+					<p class="text-center text-xs text-stone-400 mt-2">
+						Login to save your progress, track analytics, and access all features
+					</p>
 				</div>
 			{/if}
 
@@ -825,17 +967,120 @@
 			{/if}
 
 			{#if status === 'idle'}
-				<p class="text-stone-600 text-base mb-4">Let's start with</p>
-				<div class="grid grid-cols-2 gap-3">
-					{#each voiceOptions as { id, label, emoji, mbti, btn } (id)}
+				<!-- Scenario Selector -->
+				<div class="mb-6">
+					<p class="text-stone-600 text-base mb-3">Choose a scenario (optional)</p>
+					<div class="flex items-center gap-2">
 						<button
-							onclick={() => connect(id)}
-							class="py-4 rounded-xl {btn} text-white font-medium text-base transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-1.5"
+							onclick={() => (showScenarioSelector = !showScenarioSelector)}
+							class="flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border text-sm font-medium transition-all
+								{selectedScenario
+								? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+								: 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'}"
 						>
-							{label}
-							{emoji} ({mbti})
+							<span class="text-base">{selectedScenario?.emoji || '🎯'}</span>
+							<span class="truncate flex-1 text-left"
+								>{selectedScenario ? selectedScenario.label : 'Choose scenario'}</span
+							>
+							<svg
+								class="w-4 h-4 transition-transform {showScenarioSelector ? 'rotate-180' : ''}"
+								fill="none"
+								stroke="currentColor"
+								viewBox="0 0 24 24"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M19 9l-7 7-7-7"
+								/>
+							</svg>
 						</button>
-					{/each}
+						{#if selectedScenario}
+							<button
+								onclick={() => (selectedScenario = null)}
+								class="p-2.5 rounded-lg border border-stone-200 text-stone-400 hover:text-stone-600 hover:bg-stone-50 transition-all"
+								title="Clear scenario"
+							>
+								<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M6 18L18 6M6 6l12 12"
+									/>
+								</svg>
+							</button>
+						{/if}
+					</div>
+
+					{#if showScenarioSelector}
+						<div
+							class="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2 p-3 rounded-xl bg-stone-50 border border-stone-200"
+						>
+							{#each scenarioOptions as scenario (scenario.id)}
+								<button
+									onclick={() => {
+										selectedScenario = getScenario(scenario.id);
+										showScenarioSelector = false;
+									}}
+									class="py-2 px-3 rounded-lg border transition-all text-sm font-medium text-left
+										{selectedScenario?.id === scenario.id
+										? 'border-rose-500 bg-rose-100 text-rose-700'
+										: 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-100'}"
+								>
+									<span class="mr-1.5">{scenario.emoji}</span>
+									{scenario.label}
+								</button>
+							{/each}
+						</div>
+					{/if}
+
+					{#if selectedScenario}
+						<div class="mt-3 p-3 rounded-lg bg-rose-50 border border-rose-100">
+							<p class="text-rose-900 font-medium text-sm mb-1">
+								{selectedScenario.emoji}
+								{selectedScenario.label}
+							</p>
+							<p class="text-rose-700 text-xs">{selectedScenario.description}</p>
+						</div>
+					{/if}
+				</div>
+
+				<!-- Animated header -->
+				<div class="mb-4 overflow-hidden">
+					<p class="text-stone-600 text-base animate-slide-in-left">Let's start with...</p>
+				</div>
+
+				<!-- Character grid - I on left, E on right -->
+				<div class="grid grid-cols-2 gap-4">
+					<!-- Left column - Introverts (I) -->
+					<div class="space-y-2">
+						<p class="text-xs font-medium text-stone-500 mb-2 text-center">Introverts (I)</p>
+						{#each voiceOptionsSorted[0].chars as char (char.id)}
+							<button
+								onclick={() => connect(char.id)}
+								class="w-full py-3 rounded-xl {char.btn} text-white font-medium text-sm transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-1.5"
+							>
+								{char.label}
+								{char.emoji} ({char.mbti})
+							</button>
+						{/each}
+					</div>
+
+					<!-- Right column - Extroverts (E) -->
+					<div class="space-y-2">
+						<p class="text-xs font-medium text-stone-500 mb-2 text-center">Extroverts (E)</p>
+						{#each voiceOptionsSorted[1].chars as char (char.id)}
+							<button
+								onclick={() => connect(char.id)}
+								class="w-full py-3 rounded-xl {char.btn} text-white font-medium text-sm transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-1.5"
+							>
+								{char.label}
+								{char.emoji} ({char.mbti})
+							</button>
+						{/each}
+					</div>
 				</div>
 				<p class="text-stone-400 text-xs mt-4 text-center">
 					Allow mic access and you're good to go!
@@ -871,24 +1116,70 @@
 				</div>
 			{:else if status === 'error'}
 				<div class="space-y-4">
-					<p class="text-stone-600 text-sm">
+					<p class="text-stone-600 text-sm mb-3">
 						Connection was lost or an error occurred. Choose a voice to start a new conversation.
 					</p>
-					<p class="text-stone-500 text-xs">Let's start with</p>
-					<div class="grid grid-cols-2 gap-2 max-h-[320px] overflow-y-auto">
-						{#each voiceOptions as { id, label, emoji, mbti, btn } (id)}
-							<button
-								onclick={() => connect(id)}
-								class="py-2.5 rounded-xl {btn} text-white font-medium text-sm transition-all flex items-center justify-center gap-1.5"
+
+					<!-- Character grid - I on left, E on right -->
+					<div class="grid grid-cols-2 gap-3 max-h-[420px] overflow-y-auto">
+						<!-- Left column - Introverts (I) -->
+						<div class="space-y-1.5">
+							<p
+								class="text-xs font-medium text-stone-400 mb-1.5 text-center sticky top-0 bg-white py-1"
 							>
-								{label}
-								{emoji} ({mbti})
-							</button>
-						{/each}
+								I
+							</p>
+							{#each voiceOptionsSorted[0].chars as char (char.id)}
+								<button
+									onclick={() => connect(char.id)}
+									class="w-full py-2 rounded-lg {char.btn} text-white font-medium text-xs transition-all flex items-center justify-center gap-1"
+								>
+									{char.label}
+									{char.emoji}
+								</button>
+							{/each}
+						</div>
+
+						<!-- Right column - Extroverts (E) -->
+						<div class="space-y-1.5">
+							<p
+								class="text-xs font-medium text-stone-400 mb-1.5 text-center sticky top-0 bg-white py-1"
+							>
+								E
+							</p>
+							{#each voiceOptionsSorted[1].chars as char (char.id)}
+								<button
+									onclick={() => connect(char.id)}
+									class="w-full py-2 rounded-lg {char.btn} text-white font-medium text-xs transition-all flex items-center justify-center gap-1"
+								>
+									{char.label}
+									{char.emoji}
+								</button>
+							{/each}
+						</div>
 					</div>
 				</div>
 			{:else if status === 'connected'}
 				<div class="space-y-6">
+					<!-- Browser compatibility notice -->
+					{#if !speechRecognitionSupported && isFirefox}
+						<div class="p-3 rounded-lg bg-blue-50 border border-blue-200">
+							<p class="text-blue-800 text-sm font-medium mb-1">🦊 Firefox Voice Mode</p>
+							<p class="text-blue-700 text-xs">
+								Voice chat works in Firefox! Note: Live transcription and pronunciation analysis are
+								only available in Chrome, Edge, or Safari.
+							</p>
+						</div>
+					{:else if !speechRecognitionSupported}
+						<div class="p-3 rounded-lg bg-amber-50 border border-amber-200">
+							<p class="text-amber-800 text-sm font-medium mb-1">🎤 Limited voice support</p>
+							<p class="text-amber-700 text-xs">
+								Voice chat is available, but live transcription requires Chrome, Edge, or Safari.
+								Text mode recommended for this browser.
+							</p>
+						</div>
+					{/if}
+
 					<!-- Voice / Text mode toggle -->
 					<div class="flex rounded-xl bg-stone-100 p-1">
 						<button
@@ -897,6 +1188,9 @@
 								{inputMode === 'voice'
 								? 'bg-white text-stone-900 shadow-sm'
 								: 'text-stone-500 hover:text-stone-700'}"
+							title={!speechRecognitionSupported
+								? 'Voice works, but without live transcription'
+								: ''}
 						>
 							<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 								<path
@@ -927,6 +1221,73 @@
 						</button>
 					</div>
 
+					<!-- Scenario Selector (Connected State) -->
+					<div class="flex items-center gap-2">
+						<button
+							onclick={() => (showScenarioSelector = !showScenarioSelector)}
+							class="flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg border text-sm font-medium transition-all
+								{selectedScenario
+								? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+								: 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'}"
+						>
+							<span class="text-base">{selectedScenario?.emoji || '🎯'}</span>
+							<span class="truncate"
+								>{selectedScenario ? selectedScenario.label : 'Choose scenario'}</span
+							>
+							<svg
+								class="w-4 h-4 transition-transform {showScenarioSelector ? 'rotate-180' : ''}"
+								fill="none"
+								stroke="currentColor"
+								viewBox="0 0 24 24"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M19 9l-7 7-7-7"
+								/>
+							</svg>
+						</button>
+						{#if selectedScenario}
+							<button
+								onclick={() => (selectedScenario = null)}
+								class="p-2 rounded-lg border border-stone-200 text-stone-400 hover:text-stone-600 hover:bg-stone-50 transition-all"
+								title="Clear scenario"
+							>
+								<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M6 18L18 6M6 6l12 12"
+									/>
+								</svg>
+							</button>
+						{/if}
+					</div>
+
+					{#if showScenarioSelector}
+						<div
+							class="grid grid-cols-2 sm:grid-cols-3 gap-2 p-3 rounded-xl bg-stone-50 border border-stone-200"
+						>
+							{#each scenarioOptions as scenario (scenario.id)}
+								<button
+									onclick={() => {
+										selectedScenario = getScenario(scenario.id);
+										showScenarioSelector = false;
+									}}
+									class="py-2 px-3 rounded-lg border transition-all text-sm font-medium text-left
+										{selectedScenario?.id === scenario.id
+										? 'border-rose-500 bg-rose-100 text-rose-700'
+										: 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-100'}"
+								>
+									<span class="mr-1.5">{scenario.emoji}</span>
+									{scenario.label}
+								</button>
+							{/each}
+						</div>
+					{/if}
+
 					{#if inputMode === 'voice'}
 						<div
 							class="rounded-2xl border p-5 flex flex-col gap-4 {isListening
@@ -950,7 +1311,24 @@
 										</div>
 									</div>
 									<div>
-										<p class="text-emerald-700 font-medium text-sm">Listening...</p>
+										<div class="flex items-center justify-between w-full">
+											<p class="text-emerald-700 font-medium text-sm">Listening...</p>
+											{#if pronunciationEnabled && currentPronunciation}
+												<div class="flex items-center gap-1.5">
+													<div
+														class="w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold
+													{currentPronunciation.clarityScore >= 80
+															? 'bg-emerald-100 text-emerald-700'
+															: currentPronunciation.clarityScore >= 60
+																? 'bg-yellow-100 text-yellow-700'
+																: 'bg-rose-100 text-rose-700'}"
+													>
+														{currentPronunciation.clarityScore}
+													</div>
+													<span class="text-xs text-emerald-600/70">clarity</span>
+												</div>
+											{/if}
+										</div>
 										<p class="text-emerald-600/70 text-xs">
 											{autoSendEnabled
 												? 'Speak naturally. Auto-sending when you pause.'
@@ -980,7 +1358,7 @@
 								{/if}
 							</div>
 
-							{#if liveTranscript || isListening}
+							{#if speechRecognitionSupported && (liveTranscript || isListening)}
 								<div class="bg-white rounded-xl border border-stone-200 p-4 min-h-[80px]">
 									{#if liveTranscript}
 										<p class="text-stone-800 text-sm leading-relaxed">{liveTranscript}</p>
@@ -988,58 +1366,65 @@
 										<p class="text-stone-400 text-sm italic">Start speaking...</p>
 									{/if}
 								</div>
+							{:else if !speechRecognitionSupported && isListening}
+								<div
+									class="bg-blue-50 rounded-xl border border-blue-200 p-4 min-h-[80px] flex items-center justify-center"
+								>
+									<div class="text-center">
+										<div class="w-8 h-8 mx-auto mb-2 rounded-full bg-blue-500 animate-pulse"></div>
+										<p class="text-blue-700 text-sm font-medium">🎤 Listening...</p>
+										<p class="text-blue-600 text-xs mt-1">Speak naturally to the AI</p>
+									</div>
+								</div>
 							{/if}
 
-							<!-- Auto Send 토글 -->
-							<div class="flex items-center justify-between px-1">
-								<label class="flex items-center gap-2 cursor-pointer select-none">
-									<button
-										onclick={toggleAutoSend}
-										class="relative w-10 h-5 rounded-full transition-colors duration-200 {autoSendEnabled
-											? 'bg-emerald-500'
-											: 'bg-stone-300'}"
-										role="switch"
-										aria-checked={autoSendEnabled}
-									>
+							<!-- Auto Send 토글 (Only for browsers with Web Speech API) -->
+							{#if speechRecognitionSupported}
+								<div class="flex items-center justify-between px-1">
+									<label class="flex items-center gap-2 cursor-pointer select-none">
+										<button
+											onclick={toggleAutoSend}
+											class="relative w-10 h-5 rounded-full transition-colors duration-200 {autoSendEnabled
+												? 'bg-emerald-500'
+												: 'bg-stone-300'}"
+											role="switch"
+											aria-checked={autoSendEnabled}
+										>
+											<span
+												class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 {autoSendEnabled
+													? 'translate-x-5'
+													: 'translate-x-0'}"
+											></span>
+										</button>
 										<span
-											class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 {autoSendEnabled
-												? 'translate-x-5'
-												: 'translate-x-0'}"
-										></span>
-									</button>
-									<span
-										class="text-xs font-medium {autoSendEnabled
-											? 'text-emerald-700'
-											: 'text-stone-500'}"
-									>
-										Auto Send
-									</span>
-								</label>
-								{#if autoSendEnabled}
-									<span class="text-xs text-stone-400">
-										말이 끝나면 {autoSendDelay / 1000}초 후 자동 전송
-									</span>
-								{/if}
-							</div>
-
-							<!-- 카운트다운 표시 -->
-							{#if autoSendCountdown > 0 && autoSendEnabled}
-								<div
-									class="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl"
-								>
-									<div
-										class="w-5 h-5 rounded-full border-2 border-amber-500 border-t-transparent animate-spin"
-									></div>
-									<span class="text-xs font-medium text-amber-700">
-										{autoSendCountdown}초 후 자동 전송...
-									</span>
-									<button
-										onclick={cancelAutoSendCountdown}
-										class="ml-auto text-xs text-amber-600 hover:text-amber-800 font-medium"
-									>
-										취소
-									</button>
+											class="text-xs font-medium {autoSendEnabled
+												? 'text-emerald-700'
+												: 'text-stone-500'}"
+										>
+											Auto Send
+										</span>
+									</label>
 								</div>
+
+								<!-- 카운트다운 표시 -->
+								{#if autoSendCountdown > 0 && autoSendEnabled}
+									<div
+										class="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl"
+									>
+										<div
+											class="w-5 h-5 rounded-full border-2 border-amber-500 border-t-transparent animate-spin"
+										></div>
+										<span class="text-xs font-medium text-amber-700">
+											{autoSendCountdown}초 후 자동 전송...
+										</span>
+										<button
+											onclick={cancelAutoSendCountdown}
+											class="ml-auto text-xs text-amber-600 hover:text-amber-800 font-medium"
+										>
+											취소
+										</button>
+									</div>
+								{/if}
 							{/if}
 
 							<div class="flex gap-2">
@@ -1052,7 +1437,7 @@
 									{isListening ? 'Stop mic' : 'Start mic'}
 								</button>
 
-								{#if liveTranscript.trim() && !autoSendEnabled}
+								{#if speechRecognitionSupported && liveTranscript.trim() && !autoSendEnabled}
 									<button
 										onclick={sendVoiceMessage}
 										class="flex-1 py-3 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-medium text-sm transition-colors flex items-center justify-center gap-2"
@@ -1073,7 +1458,7 @@
 								{/if}
 							</div>
 
-							{#if liveTranscript.trim()}
+							{#if speechRecognitionSupported && liveTranscript.trim()}
 								<button
 									onclick={clearTranscript}
 									class="text-xs text-stone-500 hover:text-stone-700 transition-colors"
@@ -1449,6 +1834,43 @@
 											{/if}
 										</span>
 										<p class="whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
+
+										<!-- Pronunciation Feedback -->
+										{#if msg.role === 'user' && msg.pronunciation && pronunciationEnabled}
+											{@const p = msg.pronunciation}
+											<div class="mt-3 p-3 rounded-lg bg-white border border-stone-200 space-y-2">
+												<div class="flex items-center justify-between">
+													<span class="text-xs font-medium text-stone-600">Pronunciation</span>
+													<div class="flex items-center gap-2">
+														<span class="text-xs text-stone-500">{p.speakingPace} WPM</span>
+														<div
+															class="px-2 py-0.5 rounded text-xs font-bold
+															{p.clarityScore >= 80
+																? 'bg-emerald-100 text-emerald-700'
+																: p.clarityScore >= 60
+																	? 'bg-yellow-100 text-yellow-700'
+																	: 'bg-rose-100 text-rose-700'}"
+														>
+															{p.clarityScore}% clear
+														</div>
+													</div>
+												</div>
+												<p class="text-xs text-stone-600">{p.feedback}</p>
+												{#if p.problematicWords && p.problematicWords.length > 0}
+													<div class="flex flex-wrap gap-1.5 mt-2">
+														{#each p.problematicWords.slice(0, 3) as word (word.word)}
+															<span
+																class="px-2 py-0.5 bg-rose-50 text-rose-700 rounded text-xs"
+																title={word.suggestion}
+															>
+																"{word.word}" ({word.confidence}%)
+															</span>
+														{/each}
+													</div>
+												{/if}
+											</div>
+										{/if}
+
 										{#if canSave}
 											{#if savedMessageIds.has(i)}
 												<span
@@ -1516,3 +1938,20 @@
 {#if $user && !$authLoading && !$onboardingLoading && !$onboardingComplete}
 	<OnboardingModal userId={$user.id} onComplete={() => checkOnboardingStatus($user.id)} />
 {/if}
+
+<style>
+	@keyframes slideInLeft {
+		from {
+			opacity: 0;
+			transform: translateX(-20px);
+		}
+		to {
+			opacity: 1;
+			transform: translateX(0);
+		}
+	}
+
+	:global(.animate-slide-in-left) {
+		animation: slideInLeft 0.6s ease-out;
+	}
+</style>

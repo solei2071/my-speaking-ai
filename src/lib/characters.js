@@ -204,3 +204,46 @@ export const voiceOptions = Object.entries(CHARACTERS).map(([id, c]) => ({
 	mbti: c.mbti,
 	btn: c.btn
 }));
+
+/**
+ * Voice options sorted by MBTI - I types on left, E types on right
+ * Grouped by similar types (NT, NF, SJ, SP)
+ */
+export const voiceOptionsSorted = [
+	// Left column - Introverts (I)
+	{
+		type: 'I',
+		chars: [
+			// Analysts (NT)
+			{ id: 'shimmer', ...CHARACTERS.shimmer }, // INTJ
+			{ id: 'ash', ...CHARACTERS.ash }, // INTP
+			// Diplomats (NF)
+			{ id: 'jane', ...CHARACTERS.jane }, // INFJ
+			{ id: 'ballad', ...CHARACTERS.ballad }, // INFP
+			// Sentinels (SJ)
+			{ id: 'echo', ...CHARACTERS.echo }, // ISTJ
+			{ id: 'sage', ...CHARACTERS.sage }, // ISFJ
+			// Explorers (SP)
+			{ id: 'cedar', ...CHARACTERS.cedar }, // ISTP
+			{ id: 'marin', ...CHARACTERS.marin } // ISFP
+		]
+	},
+	// Right column - Extroverts (E)
+	{
+		type: 'E',
+		chars: [
+			// Analysts (NT)
+			{ id: 'verse', ...CHARACTERS.verse }, // ENTJ
+			{ id: 'luna', ...CHARACTERS.luna }, // ENTP
+			// Diplomats (NF)
+			{ id: 'shane', ...CHARACTERS.shane }, // ENFJ
+			{ id: 'ruby', ...CHARACTERS.ruby }, // ENFP
+			// Sentinels (SJ)
+			{ id: 'jessica', ...CHARACTERS.jessica }, // ESTJ
+			{ id: 'coral', ...CHARACTERS.coral }, // ESFJ
+			// Explorers (SP)
+			{ id: 'monaco', ...CHARACTERS.monaco }, // ESTP
+			{ id: 'alloy', ...CHARACTERS.alloy } // ESFP
+		]
+	}
+];

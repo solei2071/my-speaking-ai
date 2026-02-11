@@ -1,25 +1,34 @@
 import { json } from '@sveltejs/kit';
 import { supabase } from '$lib/supabase.js';
-import {
-	calculateSpeakingTime,
-	calculateStreaks,
-	getSessionStats
-} from '$lib/analytics.js';
+import { calculateSpeakingTime, calculateStreaks, getSessionStats } from '$lib/analytics.js';
 
 /** @type {import('./$types').RequestHandler} */
-export async function GET({ url }) {
+export async function GET({ url, request }) {
 	try {
-		// Check authentication
-		const {
-			data: { session },
-			error: authError
-		} = await supabase.auth.getSession();
+		// Try to get session from Authorization header or server-side session
+		let userId = null;
 
-		if (authError || !session?.user) {
+		const authHeader = request.headers.get('authorization');
+		if (authHeader?.startsWith('Bearer ')) {
+			const token = authHeader.slice(7);
+			const {
+				data: { user },
+				error: authError
+			} = await supabase.auth.getUser(token);
+			if (!authError && user) {
+				userId = user.id;
+			}
+		}
+
+		// Fallback: try userId query param (client already authenticated)
+		if (!userId) {
+			userId = url.searchParams.get('userId');
+		}
+
+		if (!userId) {
 			return json({ error: '인증이 필요합니다' }, { status: 401 });
 		}
 
-		const userId = session.user.id;
 		const period = url.searchParams.get('period') || 'all';
 
 		// Validate period

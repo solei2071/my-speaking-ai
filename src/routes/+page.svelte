@@ -1,9 +1,11 @@
 <script>
 	import { onDestroy } from 'svelte';
-	import { resolveRoute } from '$app/navigation';
+	import { SvelteSet } from 'svelte/reactivity';
+	import { resolveRoute } from '$app/paths';
 	import { RealtimeAgent, RealtimeSession } from '@openai/agents-realtime';
 	import { user, authLoading, signOut, onboardingComplete, onboardingLoading } from '$lib/auth.js';
 	import { saveMessage, fetchSessions, fetchSessionMessages } from '$lib/conversation.js';
+	import { saveSentence, fetchSavedSentences, deleteSavedSentence } from '$lib/savedSentences.js';
 	import { getCharacter, voiceOptions } from '$lib/characters.js';
 	import OnboardingModal from '$lib/OnboardingModal.svelte';
 	import { checkOnboardingStatus } from '$lib/profile.js';
@@ -20,7 +22,6 @@
 	let logContainer = $state(null);
 	let textInput = $state('');
 	let inputMode = $state('voice');
-	let micOn = $state(false);
 
 	// Speech recognition for live transcription
 	let recognition = $state(null);
@@ -31,14 +32,12 @@
 	// AI speaking state
 	let isSpeaking = $state(false);
 	let streamingText = $state('');
-	let streamingMessageId = $state(null);
 
 	// Auto-send timer
 	let autoSendTimer = $state(null);
 
 	// Cleanup tracking
 	let cleanupFns = [];
-	let wsMessageHandler = null;
 
 	// History view
 	let historySessions = $state([]);
@@ -47,83 +46,85 @@
 	let historyMessages = $state([]);
 	let historyLoading = $state(false);
 
+	// Saved sentences
+	let savedView = $state(false);
+	let savedSentences = $state([]);
+	let savedLoading = $state(false);
+	let savedToast = $state(false);
+	let savedMessageIds = $state(new Set());
+
+	// Track which assistant messages we've already saved to DB to prevent duplicates
+	let savedToDbSet = new SvelteSet();
+
 	// Cleanup on component unmount
 	onDestroy(() => {
-		console.log('[Cleanup] Component unmounting, cleaning up resources...');
-
-		// 1. Clear timer
 		if (autoSendTimer) {
 			clearTimeout(autoSendTimer);
 			autoSendTimer = null;
 		}
 
-		// 2. Stop and cleanup Speech Recognition
 		if (recognition) {
 			try {
 				recognition.stop();
 				recognition.onresult = null;
 				recognition.onerror = null;
 				recognition.onend = null;
-			} catch (e) {
-				console.warn('[Cleanup] Speech recognition cleanup failed:', e);
+			} catch {
+				/* ignore */
 			}
 			recognition = null;
 		}
 
-		// 3. Remove WebSocket listener
-		if (session?.transport && wsMessageHandler) {
-			const ws = session.transport.ws || session.transport.socket;
-			if (ws?.removeEventListener) {
-				ws.removeEventListener('message', wsMessageHandler);
-				console.log('[Cleanup] WebSocket listener removed');
-			}
-		}
-
-		// 4. Close session
 		if (session) {
 			try {
 				session.close();
-				console.log('[Cleanup] Session closed');
-			} catch (e) {
-				console.warn('[Cleanup] Session close failed:', e);
+			} catch {
+				/* ignore */
 			}
 			session = null;
 		}
 
-		// 5. Run all tracked cleanup functions
 		cleanupFns.forEach((fn) => {
 			try {
 				fn();
-			} catch (e) {
-				console.warn('[Cleanup] Cleanup function failed:', e);
+			} catch {
+				/* ignore */
 			}
 		});
 		cleanupFns = [];
-
-		console.log('[Cleanup] All resources cleaned up');
 	});
 
-	// Helper function to add cleanable event listeners
 	function addCleanableListener(target, event, handler) {
 		if (target?.on) {
 			target.on(event, handler);
 			cleanupFns.push(() => {
 				try {
 					target.off?.(event, handler);
-				} catch (e) {
-					console.warn('[Cleanup] Failed to remove listener:', e);
+				} catch {
+					/* ignore */
 				}
 			});
 		}
 	}
 
+	// Save assistant message to DB, but only once per unique text
+	function saveAssistantToDb(text) {
+		if (!$user || !currentSessionId || !text?.trim()) return;
+		const key = `${currentSessionId}:${text}`;
+		if (savedToDbSet.has(key)) return;
+		savedToDbSet.add(key);
+		saveMessage(
+			$user.id,
+			currentSessionId,
+			currentCharacterName,
+			'assistant',
+			text,
+			currentVoiceId
+		).catch((e) => console.warn('[DB] Save failed:', e.message));
+	}
+
 	function handleServerEvent(event) {
 		if (!event?.type) return;
-
-		// Debug: log event types
-		if (event.type?.includes('response') || event.type?.includes('transcript')) {
-			console.log('[Realtime Event]', event.type, event);
-		}
 
 		// Audio transcript delta - real-time text as AI speaks
 		if (event.type === 'response.audio_transcript.delta') {
@@ -141,28 +142,21 @@
 			streamingText = '';
 		}
 
-		// Response done
-		if (event.type === 'response.done' || event.type === 'response.audio_transcript.done') {
+		// Response done - finalize the message
+		if (event.type === 'response.audio_transcript.done') {
 			isSpeaking = false;
-			// Finalize the message
-			const lastMsg = conversationLog[conversationLog.length - 1];
-			if (lastMsg?.isStreaming && streamingText) {
-				conversationLog = [
-					...conversationLog.slice(0, -1),
-					{ role: 'assistant', text: streamingText }
-				];
-				if ($user && currentSessionId)
-					saveMessage(
-						$user.id,
-						currentSessionId,
-						currentCharacterName,
-						'assistant',
-						streamingText,
-						currentVoiceId
-					);
-			}
-			streamingText = '';
+			finalizeStreamingMessage();
 		}
+	}
+
+	function finalizeStreamingMessage() {
+		const lastMsg = conversationLog[conversationLog.length - 1];
+		const text = streamingText || lastMsg?.text;
+		if (lastMsg?.isStreaming && text) {
+			conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text }];
+			saveAssistantToDb(text);
+		}
+		streamingText = '';
 	}
 
 	function getMessageText(item) {
@@ -182,21 +176,18 @@
 		const lastIndex = conversationLog.length - 1;
 		const lastMsg = conversationLog[lastIndex];
 
-		// If last message is from user, add new streaming assistant message
-		if (lastMsg?.role === 'user') {
-			conversationLog.push({ role: 'assistant', text, isStreaming: true });
-		}
-		// If last message is streaming assistant, update it in-place
-		else if (lastMsg?.isStreaming) {
-			conversationLog[lastIndex] = { role: 'assistant', text, isStreaming: true };
-		}
-		// If no messages or last is completed assistant (shouldn't happen normally)
-		else if (!lastMsg || lastMsg.role === 'assistant') {
-			// Check if we need to add a new streaming message
+		if (lastMsg?.role === 'user' || (!lastMsg && conversationLog.length === 0)) {
+			conversationLog = [...conversationLog, { role: 'assistant', text, isStreaming: true }];
+		} else if (lastMsg?.isStreaming) {
+			conversationLog = [
+				...conversationLog.slice(0, -1),
+				{ role: 'assistant', text, isStreaming: true }
+			];
+		} else if (!lastMsg || lastMsg.role === 'assistant') {
 			const userCount = conversationLog.filter((m) => m.role === 'user').length;
 			const assistantCount = conversationLog.filter((m) => m.role === 'assistant').length;
 			if (userCount > assistantCount) {
-				conversationLog.push({ role: 'assistant', text, isStreaming: true });
+				conversationLog = [...conversationLog, { role: 'assistant', text, isStreaming: true }];
 			}
 		}
 
@@ -206,8 +197,6 @@
 	}
 
 	function updateConversationLog(history) {
-		// Only process completed messages from history
-		// Streaming is handled separately via WebSocket events
 		let latestCompletedText = null;
 
 		for (const item of history) {
@@ -220,55 +209,25 @@
 			}
 		}
 
-		// If we have a completed message, update the log
 		if (latestCompletedText) {
 			const lastMsg = conversationLog[conversationLog.length - 1];
 
-			// Replace streaming message with completed
 			if (lastMsg?.isStreaming) {
 				conversationLog = [
 					...conversationLog.slice(0, -1),
 					{ role: 'assistant', text: latestCompletedText }
 				];
 				isSpeaking = false;
-				if ($user && currentSessionId)
-					saveMessage(
-						$user.id,
-						currentSessionId,
-						currentCharacterName,
-						'assistant',
-						latestCompletedText,
-						currentVoiceId
-					);
-			}
-			// Or add if there's no assistant message yet
-			else if (lastMsg?.role === 'user') {
+				saveAssistantToDb(latestCompletedText);
+			} else if (lastMsg?.role === 'user') {
 				conversationLog = [...conversationLog, { role: 'assistant', text: latestCompletedText }];
-				if ($user && currentSessionId)
-					saveMessage(
-						$user.id,
-						currentSessionId,
-						currentCharacterName,
-						'assistant',
-						latestCompletedText,
-						currentVoiceId
-					);
-			}
-			// Or update if text changed
-			else if (lastMsg?.role === 'assistant' && lastMsg.text !== latestCompletedText) {
+				saveAssistantToDb(latestCompletedText);
+			} else if (lastMsg?.role === 'assistant' && lastMsg.text !== latestCompletedText) {
 				conversationLog = [
 					...conversationLog.slice(0, -1),
 					{ role: 'assistant', text: latestCompletedText }
 				];
-				if ($user && currentSessionId)
-					saveMessage(
-						$user.id,
-						currentSessionId,
-						currentCharacterName,
-						'assistant',
-						latestCompletedText,
-						currentVoiceId
-					);
+				saveAssistantToDb(latestCompletedText);
 			}
 		}
 
@@ -281,6 +240,8 @@
 		status = 'connecting';
 		error = null;
 		conversationLog = [];
+		savedToDbSet = new SvelteSet();
+		savedMessageIds = new Set();
 		currentSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
 		try {
@@ -316,7 +277,7 @@
 
 			const realtimeSession = new RealtimeSession(agent);
 
-			// Use cleanable listeners for proper cleanup
+			// Only use SDK events — no raw WebSocket hook to avoid duplicate processing
 			addCleanableListener(realtimeSession, 'history_updated', (history) =>
 				updateConversationLog(history)
 			);
@@ -330,41 +291,11 @@
 
 			addCleanableListener(realtimeSession, 'audio_done', () => {
 				isSpeaking = false;
-				streamingMessageId = null;
-				// Mark streaming message as complete
-				const lastMsg = conversationLog[conversationLog.length - 1];
-				if (lastMsg?.isStreaming) {
-					conversationLog = [
-						...conversationLog.slice(0, -1),
-						{ role: 'assistant', text: lastMsg.text }
-					];
-					if ($user && currentSessionId)
-						saveMessage(
-							$user.id,
-							currentSessionId,
-							currentCharacterName,
-							'assistant',
-							lastMsg.text,
-							currentVoiceId
-						);
-				}
+				finalizeStreamingMessage();
 			});
 
-			if (realtimeSession.transport) {
-				addCleanableListener(realtimeSession.transport, 'connection_change', (connStatus) => {
-					if (connStatus === 'disconnected') {
-						error = 'Connection lost. Please start a new conversation.';
-						status = 'error';
-						session = null;
-						isSpeaking = false;
-					}
-				});
-			}
-
-			// Listen to various events for real-time streaming
 			addCleanableListener(realtimeSession, 'server_event', (event) => handleServerEvent(event));
-			addCleanableListener(realtimeSession, 'message', (event) => handleServerEvent(event));
-			addCleanableListener(realtimeSession, 'response', (event) => handleServerEvent(event));
+
 			addCleanableListener(realtimeSession, 'transcript', (data) => {
 				if (data?.text || data?.delta) {
 					isSpeaking = true;
@@ -374,40 +305,7 @@
 				}
 			});
 
-			// Also try transport events
-			if (realtimeSession.transport) {
-				addCleanableListener(realtimeSession.transport, 'message', (event) =>
-					handleServerEvent(event)
-				);
-			}
-
 			await realtimeSession.connect({ apiKey: ephemeralKey });
-
-			// Hook into WebSocket after connection
-			setTimeout(() => {
-				try {
-					const transport = realtimeSession.transport;
-					console.log('[Debug] Transport:', transport);
-					console.log('[Debug] Transport keys:', transport ? Object.keys(transport) : 'null');
-					const ws = transport?.ws || transport?.socket || transport?._ws || transport?.websocket;
-					console.log('[Debug] WebSocket found:', !!ws);
-					if (ws && ws.addEventListener) {
-						// Create trackable message handler
-						wsMessageHandler = (event) => {
-							try {
-								const data = JSON.parse(event.data);
-								handleServerEvent(data);
-							} catch (e) {
-								console.warn('[WebSocket] Parse error:', e);
-							}
-						};
-						ws.addEventListener('message', wsMessageHandler);
-						console.log('[Debug] WebSocket message listener added');
-					}
-				} catch (e) {
-					console.log('[Debug] WebSocket hook error:', e);
-				}
-			}, 100);
 
 			session = realtimeSession;
 			const char = getCharacter(voice);
@@ -417,9 +315,7 @@
 			currentVoiceId = voice;
 			status = 'connected';
 			inputMode = 'voice';
-			// Keep RealtimeSession mic muted - we use Web Speech API for input
 			if (realtimeSession.muted !== null) realtimeSession.mute(true);
-			// Initialize speech recognition
 			initSpeechRecognition();
 		} catch (e) {
 			status = 'error';
@@ -432,45 +328,23 @@
 	let disconnectMessage = $state('');
 
 	function disconnect() {
-		console.log('[API] Disconnecting...');
-
-		// Stop speech recognition
 		stopListening();
 
-		// Clear timers
 		if (autoSendTimer) {
 			clearTimeout(autoSendTimer);
 			autoSendTimer = null;
 		}
 
-		// Reset states
 		liveTranscript = '';
 		finalTranscript = '';
 		isSpeaking = false;
 		streamingText = '';
-		streamingMessageId = null;
 
-		// Close session and WebSocket
 		if (session) {
 			try {
-				// Try to close WebSocket directly
-				const transport = session.transport;
-				const ws = transport?.ws || transport?.socket || transport?._ws || transport?.websocket;
-				if (ws) {
-					console.log('[API] WebSocket state before close:', ws.readyState);
-					// 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
-					if (ws.readyState === 1) {
-						// OPEN
-						ws.close(1000, 'User disconnected');
-						console.log('[API] WebSocket close() called');
-					}
-				}
-
-				// Close session
 				session.close();
-				console.log('[API] Session close() called');
-			} catch (e) {
-				console.log('[API] Error during disconnect:', e);
+			} catch {
+				/* ignore */
 			}
 			session = null;
 		}
@@ -478,12 +352,9 @@
 		currentSessionId = null;
 		currentVoiceId = null;
 
-		// Show disconnection confirmation
 		status = 'disconnected';
 		disconnectMessage = 'Connection closed. No more API calls.';
-		console.log('[API] Disconnected successfully');
 
-		// After 2 seconds, go back to idle
 		setTimeout(() => {
 			if (status === 'disconnected') {
 				status = 'idle';
@@ -495,12 +366,6 @@
 
 	function safeSendMessage(msg) {
 		if (!session) return false;
-		const transport = session.transport;
-		if (transport?.status && transport.status !== 'connected') {
-			error = 'Connection lost. Please start a new conversation.';
-			status = 'error';
-			return false;
-		}
 		try {
 			session.sendMessage(msg);
 			return true;
@@ -516,26 +381,28 @@
 		const text = textInput.trim();
 		if (!text || !session) return;
 
-		// Add user message to log immediately
 		conversationLog = [...conversationLog, { role: 'user', text }];
 		requestAnimationFrame(() => {
 			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
 		});
 
-		// Save to DB
 		if ($user && currentSessionId) {
-			saveMessage($user.id, currentSessionId, currentCharacterName, 'user', text, currentVoiceId);
+			saveMessage(
+				$user.id,
+				currentSessionId,
+				currentCharacterName,
+				'user',
+				text,
+				currentVoiceId
+			).catch((e) => console.warn('[DB] Save failed:', e.message));
 		}
 
-		// Send to tutor
 		if (safeSendMessage(text)) textInput = '';
 	}
 
 	function setInputMode(mode) {
 		inputMode = mode;
-		// Always keep RealtimeSession mic muted (we use Web Speech API)
 		if (session?.muted !== null) session.mute(true);
-		// Stop listening when switching modes
 		if (mode === 'text') {
 			stopListening();
 			liveTranscript = '';
@@ -555,25 +422,46 @@
 		return conversationLog.some((m) => m.role === 'user');
 	}
 
+	function sendHelperMessage(text, label) {
+		if (!session) return;
+		conversationLog = [...conversationLog, { role: 'user', text: `[${label}]` }];
+		requestAnimationFrame(() => {
+			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
+		});
+		if ($user && currentSessionId) {
+			saveMessage(
+				$user.id,
+				currentSessionId,
+				currentCharacterName,
+				'user',
+				`[${label}]`,
+				currentVoiceId
+			).catch((e) => console.warn('[DB] Save failed:', e.message));
+		}
+		safeSendMessage(text);
+	}
+
 	function requestGrammarCorrection() {
-		safeSendMessage(
-			'Please correct the grammar and spelling in my previous message. Give me the corrected version and briefly explain any mistakes.'
+		sendHelperMessage(
+			'Please correct the grammar and spelling in my previous message. Give me the corrected version and briefly explain any mistakes.',
+			'Adjust grammar'
 		);
 	}
 
 	function requestParaphrase() {
-		safeSendMessage(
-			'Please paraphrase my previous message into more natural English. Give me a few alternative versions if possible.'
+		sendHelperMessage(
+			'Please paraphrase my previous message into more natural English. Give me a few alternative versions if possible.',
+			'Paraphrase'
 		);
 	}
 
 	function requestRandomQuestion() {
-		safeSendMessage(
-			'Please ask me a random question to practice English conversation. Pick a fun, interesting topic (e.g. hobbies, travel, food, opinions, hypotheticals). Just ask the question directly—no grammar correction or paraphrase needed.'
+		sendHelperMessage(
+			'Please ask me a random question to practice English conversation. Pick a fun, interesting topic (e.g. hobbies, travel, food, opinions, hypotheticals). Just ask the question directly—no grammar correction or paraphrase needed.',
+			'Random question'
 		);
 	}
 
-	// Initialize speech recognition
 	function initSpeechRecognition() {
 		if (typeof window === 'undefined') return;
 		const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -601,15 +489,11 @@
 			finalTranscript = final;
 			liveTranscript = final + interim;
 
-			// Check for "send it" trigger phrase
 			const lowerText = liveTranscript.toLowerCase().trim();
 			if (lowerText.endsWith('send it') || lowerText.endsWith('send it.')) {
-				// Clear any existing timer
 				if (autoSendTimer) clearTimeout(autoSendTimer);
-				// Start 2 second countdown
 				autoSendTimer = setTimeout(() => {
 					if (liveTranscript.trim()) {
-						// Remove "send it" from the message
 						const cleanText = liveTranscript.replace(/send it\.?$/i, '').trim();
 						if (cleanText) {
 							liveTranscript = cleanText;
@@ -619,7 +503,6 @@
 					}
 				}, 2000);
 			} else {
-				// Clear timer if user continues speaking
 				if (autoSendTimer) {
 					clearTimeout(autoSendTimer);
 					autoSendTimer = null;
@@ -634,12 +517,11 @@
 		};
 
 		recognition.onend = () => {
-			// Auto-restart if still listening
 			if (isListening && recognition) {
 				try {
 					recognition.start();
-				} catch (e) {
-					console.warn('[Speech] Auto-restart failed:', e);
+				} catch {
+					/* ignore */
 				}
 			}
 		};
@@ -649,24 +531,21 @@
 		if (!recognition) initSpeechRecognition();
 		if (!recognition) return;
 
-		// Clear any existing transcript
 		finalTranscript = '';
 		liveTranscript = '';
 
-		// Stop any existing recognition first
 		try {
 			recognition.stop();
-		} catch (e) {
-			console.warn('[Speech] Stop failed (may already be stopped):', e);
+		} catch {
+			/* ignore */
 		}
 
-		// Start fresh after a brief delay
 		setTimeout(() => {
 			isListening = true;
 			try {
 				recognition.start();
-			} catch (e) {
-				console.warn('[Speech] Start failed (may already be started):', e);
+			} catch {
+				/* ignore */
 			}
 		}, 50);
 	}
@@ -680,8 +559,8 @@
 		if (recognition) {
 			try {
 				recognition.stop();
-			} catch (e) {
-				console.warn('[Speech] Stop failed:', e);
+			} catch {
+				/* ignore */
 			}
 		}
 	}
@@ -690,40 +569,39 @@
 		const text = liveTranscript.trim();
 		if (!text || !session) return;
 
-		// Stop listening first to prevent new text from coming in
 		const wasListening = isListening;
 		if (recognition) {
 			try {
 				recognition.stop();
-			} catch (e) {
-				console.warn('[Speech] Stop before send failed:', e);
+			} catch {
+				/* ignore */
 			}
 		}
 		isListening = false;
 
-		// Clear transcript immediately
 		liveTranscript = '';
 		finalTranscript = '';
 
-		// Add user message to log
 		conversationLog = [...conversationLog, { role: 'user', text }];
 		requestAnimationFrame(() => {
 			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
 		});
 
-		// Save to DB
 		if ($user && currentSessionId) {
-			saveMessage($user.id, currentSessionId, currentCharacterName, 'user', text, currentVoiceId);
+			saveMessage(
+				$user.id,
+				currentSessionId,
+				currentCharacterName,
+				'user',
+				text,
+				currentVoiceId
+			).catch((e) => console.warn('[DB] Save failed:', e.message));
 		}
 
-		// Send to tutor
 		safeSendMessage(text);
 
-		// Restart listening if it was on
 		if (wasListening) {
-			setTimeout(() => {
-				startListening();
-			}, 100);
+			setTimeout(() => startListening(), 100);
 		}
 	}
 
@@ -756,16 +634,54 @@
 
 	function backToMain() {
 		historyView = null;
+		savedView = false;
 		historySessions = [];
 		selectedSession = null;
 		historyMessages = [];
 	}
+
+	async function handleSaveSentence(msg, index) {
+		if (!$user || msg.isStreaming || savedMessageIds.has(index)) return;
+		try {
+			await saveSentence(
+				$user.id,
+				msg.text,
+				currentCharacterName,
+				currentVoiceId,
+				currentSessionId
+			);
+			savedMessageIds = new Set([...savedMessageIds, index]);
+			savedToast = true;
+			setTimeout(() => (savedToast = false), 2000);
+		} catch (e) {
+			console.error('[SavedSentences] Failed to save:', e);
+		}
+	}
+
+	async function loadSaved() {
+		if (!$user) return;
+		savedLoading = true;
+		savedView = true;
+		historyView = null;
+		savedSentences = await fetchSavedSentences($user.id);
+		savedLoading = false;
+	}
+
+	async function handleDeleteSaved(sentenceId) {
+		if (!$user) return;
+		try {
+			await deleteSavedSentence($user.id, sentenceId);
+			savedSentences = savedSentences.filter((s) => s.id !== sentenceId);
+		} catch (e) {
+			console.error('[SavedSentences] Failed to delete:', e);
+		}
+	}
 </script>
 
 <div class="h-screen overflow-hidden bg-stone-50 flex">
-	<!-- Left: Controls + Input (Preply-style) -->
+	<!-- Left: Controls + Input -->
 	<aside
-		class="w-full lg:w-[420px] h-screen flex flex-col bg-white border-r border-stone-200 p-8 lg:p-10 overflow-y-auto shrink-0"
+		class="w-full lg:w-[520px] h-screen flex flex-col bg-white border-r border-stone-200 p-10 lg:p-12 overflow-y-auto shrink-0"
 	>
 		<div class="flex-1">
 			<!-- User Auth Section -->
@@ -777,36 +693,42 @@
 					Loading...
 				</div>
 			{:else if $user}
-				<div
-					class="mb-6 flex items-center justify-between p-3 bg-stone-50 rounded-xl border border-stone-100"
-				>
-					<div class="flex items-center gap-3">
-						<div class="w-8 h-8 rounded-full bg-pink-100 flex items-center justify-center">
-							<span class="text-pink-600 text-sm font-medium">
+				<div class="mb-8 p-4 bg-stone-50 rounded-xl border border-stone-100">
+					<div class="flex items-center gap-3 mb-3">
+						<div class="w-10 h-10 rounded-full bg-pink-100 flex items-center justify-center">
+							<span class="text-pink-600 text-base font-medium">
 								{($user.user_metadata?.name || $user.email)?.[0]?.toUpperCase() || '?'}
 							</span>
 						</div>
-						<div class="text-sm">
+						<div>
 							<p class="font-medium text-stone-700">{$user.user_metadata?.name || 'User'}</p>
 							<p class="text-xs text-stone-400">{$user.email}</p>
 						</div>
 					</div>
-					<div class="flex gap-2">
+					<div class="flex flex-wrap gap-2">
 						<button
-							onclick={() => (historyView ? backToMain() : loadHistory())}
-							class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors"
+							onclick={() => (historyView || savedView ? backToMain() : loadHistory())}
+							class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors border border-stone-200"
 						>
-							{historyView ? '← Back' : 'History'}
+							{historyView || savedView ? '← Back' : 'History'}
 						</button>
+						{#if !savedView}
+							<button
+								onclick={loadSaved}
+								class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors border border-stone-200"
+							>
+								Saved
+							</button>
+						{/if}
 						<a
 							href={resolveRoute('/analytics')}
-							class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors"
+							class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors border border-stone-200"
 						>
 							Analytics
 						</a>
 						<button
 							onclick={() => signOut()}
-							class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors"
+							class="px-3 py-1.5 text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors border border-stone-200"
 						>
 							Logout
 						</button>
@@ -829,10 +751,10 @@
 				</div>
 			{/if}
 
-			<h1 class="text-2xl font-bold text-stone-900 tracking-tight mb-2">
+			<h1 class="text-3xl font-bold text-stone-900 tracking-tight mb-3 mt-4">
 				Your personal English tutor
 			</h1>
-			<p class="text-stone-500 text-sm leading-relaxed mb-10">
+			<p class="text-stone-500 text-base leading-relaxed mb-12">
 				Practice with a tutor who corrects your grammar, suggests better expressions, and keeps the
 				conversation flowing naturally.
 			</p>
@@ -844,12 +766,12 @@
 			{/if}
 
 			{#if status === 'idle'}
-				<p class="text-stone-600 text-sm mb-3">Let's start with</p>
-				<div class="grid grid-cols-2 gap-2">
-					{#each voiceOptions as { id, label, emoji, mbti, btn }}
+				<p class="text-stone-600 text-base mb-4">Let's start with</p>
+				<div class="grid grid-cols-2 gap-3">
+					{#each voiceOptions as { id, label, emoji, mbti, btn } (id)}
 						<button
 							onclick={() => connect(id)}
-							class="py-3 rounded-xl {btn} text-white font-medium text-sm transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-1.5"
+							class="py-4 rounded-xl {btn} text-white font-medium text-base transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-1.5"
 						>
 							{label}
 							{emoji} ({mbti})
@@ -895,7 +817,7 @@
 					</p>
 					<p class="text-stone-500 text-xs">Let's start with</p>
 					<div class="grid grid-cols-2 gap-2 max-h-[320px] overflow-y-auto">
-						{#each voiceOptions as { id, label, emoji, mbti, btn }}
+						{#each voiceOptions as { id, label, emoji, mbti, btn } (id)}
 							<button
 								onclick={() => connect(id)}
 								class="py-2.5 rounded-xl {btn} text-white font-medium text-sm transition-all flex items-center justify-center gap-1.5"
@@ -947,13 +869,11 @@
 					</div>
 
 					{#if inputMode === 'voice'}
-						<!-- Voice mode: Live transcription with manual send -->
 						<div
 							class="rounded-2xl border p-5 flex flex-col gap-4 {isListening
 								? 'bg-emerald-50 border-emerald-100'
 								: 'bg-stone-50 border-stone-200'}"
 						>
-							<!-- Mic status indicator -->
 							<div class="flex items-center gap-3">
 								{#if isListening}
 									<div class="relative">
@@ -999,7 +919,6 @@
 								{/if}
 							</div>
 
-							<!-- Live transcript display -->
 							{#if liveTranscript || isListening}
 								<div class="bg-white rounded-xl border border-stone-200 p-4 min-h-[80px]">
 									{#if liveTranscript}
@@ -1010,7 +929,6 @@
 								</div>
 							{/if}
 
-							<!-- Control buttons -->
 							<div class="flex gap-2">
 								<button
 									onclick={toggleMic}
@@ -1098,13 +1016,76 @@
 
 	<!-- Right: Conversation or History -->
 	<main class="flex-1 flex flex-col min-h-0 overflow-hidden">
-		<div class="flex-1 flex flex-col min-h-0 p-6 lg:p-10">
-			{#if historyView === 'list'}
+		<div class="flex-1 flex flex-col min-h-0 p-8 lg:p-12">
+			{#if savedView}
+				<div
+					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden"
+				>
+					<div class="shrink-0 px-8 py-5 border-b border-stone-100 bg-stone-50/50">
+						<h2 class="text-base font-semibold text-stone-700">Saved Sentences</h2>
+					</div>
+					<div class="flex-1 min-h-0 overflow-y-auto p-6">
+						{#if savedLoading}
+							<div class="flex justify-center py-12">
+								<div
+									class="w-8 h-8 border-2 border-pink-500 border-t-transparent rounded-full animate-spin"
+								></div>
+							</div>
+						{:else if savedSentences.length === 0}
+							<div class="text-center py-12 text-stone-500 text-sm">
+								<p>No saved sentences yet.</p>
+								<p class="mt-2">Click the Save button on an AI response to save it.</p>
+							</div>
+						{:else}
+							<div class="space-y-3">
+								{#each savedSentences as sentence (sentence.id)}
+									{@const char = sentence.character_voice_id
+										? getCharacter(sentence.character_voice_id)
+										: { label: sentence.character_name, emoji: '' }}
+									<div
+										class="p-4 rounded-xl border border-stone-200 hover:border-stone-300 transition-colors"
+									>
+										<div class="flex justify-between items-start gap-3">
+											<div class="flex-1 min-w-0">
+												<span class="text-xs font-medium text-stone-500"
+													>{char.label}{char.emoji ? ` ${char.emoji}` : ''}</span
+												>
+												<p
+													class="text-sm text-stone-800 mt-1 whitespace-pre-wrap break-words leading-relaxed"
+												>
+													{sentence.content}
+												</p>
+												<span class="text-xs text-stone-400 mt-2 block"
+													>{new Date(sentence.created_at).toLocaleString()}</span
+												>
+											</div>
+											<button
+												onclick={() => handleDeleteSaved(sentence.id)}
+												class="shrink-0 p-1.5 rounded-lg text-stone-400 hover:text-rose-500 hover:bg-rose-50 transition-colors"
+												title="Delete"
+											>
+												<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+													/>
+												</svg>
+											</button>
+										</div>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				</div>
+			{:else if historyView === 'list'}
 				<div
 					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden"
 				>
 					<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50">
-						<h2 class="text-sm font-semibold text-stone-700">Past Conversations</h2>
+						<h2 class="text-base font-semibold text-stone-700">Past Conversations</h2>
 					</div>
 					<div class="flex-1 min-h-0 overflow-y-auto p-6">
 						{#if historyLoading}
@@ -1120,7 +1101,7 @@
 							</div>
 						{:else}
 							<div class="space-y-2">
-								{#each historySessions as sess}
+								{#each historySessions as sess (sess.session_id)}
 									{@const char = sess.character_voice_id
 										? getCharacter(sess.character_voice_id)
 										: { label: sess.character_name, emoji: '', personality: '' }}
@@ -1195,7 +1176,7 @@
 								>
 								Back
 							</button>
-							<h2 class="text-sm font-semibold text-stone-700">
+							<h2 class="text-base font-semibold text-stone-700">
 								{detailChar.label}{detailChar.emoji ? ` ${detailChar.emoji}` : ''}{detailChar.mbti
 									? ` (${detailChar.mbti})`
 									: ''} · {new Date(selectedSession?.started_at).toLocaleString()}
@@ -1220,7 +1201,7 @@
 								></div>
 							</div>
 						{:else}
-							{#each historyMessages as msg}
+							{#each historyMessages as msg, idx (idx)}
 								<div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'}">
 									<div
 										class="max-w-[85%] rounded-2xl px-4 py-3 text-sm {msg.role === 'user'
@@ -1247,7 +1228,7 @@
 						class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between gap-4 flex-wrap"
 					>
 						<div class="flex items-center gap-2">
-							<h2 class="text-sm font-semibold text-stone-700">Conversation</h2>
+							<h2 class="text-base font-semibold text-stone-700">Conversation</h2>
 							{#if status === 'connected'}
 								<span
 									class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"
@@ -1266,7 +1247,7 @@
 									title="Get a random question to practice"
 									class="px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 text-xs font-medium transition-colors"
 								>
-									🥳
+									Random Q
 								</button>
 								<button
 									onclick={requestGrammarCorrection}
@@ -1321,19 +1302,18 @@
 								</p>
 							</div>
 						{:else}
-							{#each conversationLog as msg, i}
+							{#each conversationLog as msg, i (i)}
 								{@const isLastAssistant =
 									msg.role === 'assistant' && i === conversationLog.length - 1}
 								{@const showSpeaking = isLastAssistant && (msg.isStreaming || isSpeaking)}
+								{@const canSave = msg.role === 'assistant' && !msg.isStreaming && $user}
 								<div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'}">
 									<div
-										class="max-w-[85%] rounded-2xl px-4 py-3 text-sm {msg.role === 'user'
+										class="max-w-[85%] rounded-2xl px-5 py-4 text-base {msg.role === 'user'
 											? 'bg-rose-50 text-stone-900 border border-rose-100'
 											: 'bg-stone-50 text-stone-800 border border-stone-100'}"
 									>
-										<span
-											class="text-xs font-medium text-stone-600 mb-1.5 flex items-center gap-1.5"
-										>
+										<span class="text-sm font-medium text-stone-600 mb-2 flex items-center gap-1.5">
 											{msg.role === 'user' ? 'You' : currentCharacterName}
 											{msg.role === 'assistant'
 												? `${currentCharacterEmoji}${currentCharacterMbti ? ` (${currentCharacterMbti})` : ''}`
@@ -1356,6 +1336,49 @@
 											{/if}
 										</span>
 										<p class="whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
+										{#if canSave}
+											{#if savedMessageIds.has(i)}
+												<span
+													class="mt-2 px-2.5 py-1 text-xs font-medium text-emerald-500 flex items-center gap-1"
+												>
+													<svg
+														class="w-3.5 h-3.5"
+														fill="none"
+														stroke="currentColor"
+														viewBox="0 0 24 24"
+													>
+														<path
+															stroke-linecap="round"
+															stroke-linejoin="round"
+															stroke-width="2"
+															d="M5 13l4 4L19 7"
+														/>
+													</svg>
+													Saved
+												</span>
+											{:else}
+												<button
+													onclick={() => handleSaveSentence(msg, i)}
+													class="mt-2 px-2.5 py-1 text-xs font-medium text-stone-400 hover:text-pink-600 hover:bg-pink-50 rounded-lg transition-colors flex items-center gap-1"
+													title="Save this sentence"
+												>
+													<svg
+														class="w-3.5 h-3.5"
+														fill="none"
+														stroke="currentColor"
+														viewBox="0 0 24 24"
+													>
+														<path
+															stroke-linecap="round"
+															stroke-linejoin="round"
+															stroke-width="2"
+															d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"
+														/>
+													</svg>
+													Save
+												</button>
+											{/if}
+										{/if}
 									</div>
 								</div>
 							{/each}
@@ -1367,7 +1390,16 @@
 	</main>
 </div>
 
-<!-- 온보딩 모달: 로그인 후 프로필/동의 미완료 시 표시 -->
+<!-- Toast notification for saved sentence -->
+{#if savedToast}
+	<div
+		class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 bg-stone-800 text-white text-sm font-medium rounded-xl shadow-lg"
+	>
+		Sentence saved!
+	</div>
+{/if}
+
+<!-- 온보딩 모달 -->
 {#if $user && !$authLoading && !$onboardingLoading && !$onboardingComplete}
 	<OnboardingModal userId={$user.id} onComplete={() => checkOnboardingStatus($user.id)} />
 {/if}

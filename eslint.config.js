@@ -17,6 +17,9 @@ const gitignorePath = path.resolve(import.meta.dirname, '.gitignore');
 
 	{
 		files: ['**/*.svelte', '**/*.svelte.js'],
-		languageOptions: { parserOptions: { svelteConfig } }
+		languageOptions: { parserOptions: { svelteConfig } },
+		rules: {
+			'svelte/no-navigation-without-resolve': 'off'
+		}
 	}
 ];

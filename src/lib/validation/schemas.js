@@ -56,6 +56,24 @@ export const analyticsRequestSchema = z.object({
 	period: z.enum(['daily', 'weekly', 'monthly', 'all']).optional()
 });
 
+// Saved Sentences 스키마
+export const saveSentenceSchema = z.object({
+	userId: z.string().uuid('잘못된 사용자 ID'),
+	content: z.string().min(1, '내용은 비워둘 수 없습니다').max(10000).trim(),
+	characterName: z.string().min(1).max(50),
+	characterVoiceId: z.string().max(50).optional().nullable(),
+	sessionId: z.string().max(200).optional().nullable()
+});
+
+export const fetchSavedSentencesSchema = z.object({
+	userId: z.string().uuid('잘못된 사용자 ID')
+});
+
+export const deleteSavedSentenceSchema = z.object({
+	userId: z.string().uuid('잘못된 사용자 ID'),
+	sentenceId: z.string().uuid('잘못된 문장 ID')
+});
+
 // 헬퍼 함수
 export function validateOrThrow(schema, data) {
 	const result = schema.safeParse(data);

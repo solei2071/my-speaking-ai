@@ -1,7 +1,8 @@
 <script>
 	import { onMount } from 'svelte';
 	import { user } from '$lib/auth.js';
-	import { goto, resolveRoute } from '$app/navigation';
+	import { goto } from '$app/navigation';
+	import { resolveRoute } from '$app/paths';
 	import StatsCard from '$lib/components/StatsCard.svelte';
 	import SpeakingTimeChart from '$lib/components/SpeakingTimeChart.svelte';
 	import StreakCalendar from '$lib/components/StreakCalendar.svelte';
@@ -14,7 +15,7 @@
 
 	onMount(async () => {
 		if (!$user) {
-			goto('/login');
+			goto(resolveRoute('/login'));
 			return;
 		}
 
@@ -26,7 +27,7 @@
 		error = null;
 
 		try {
-			const response = await fetch(`/api/analytics/stats?period=${period}`);
+			const response = await fetch(`/api/analytics/stats?period=${period}&userId=${$user.id}`);
 			const result = await response.json();
 
 			if (!response.ok) {
@@ -51,9 +52,7 @@
 		if (!analyticsData?.sessions?.favoriteCharacter) return null;
 
 		const charName = analyticsData.sessions.favoriteCharacter.name;
-		const charId = Object.keys(CHARACTERS).find(
-			(id) => CHARACTERS[id].label === charName
-		);
+		const charId = Object.keys(CHARACTERS).find((id) => CHARACTERS[id].label === charName);
 
 		if (charId) {
 			return {
@@ -86,9 +85,7 @@
 					>
 						← 홈으로
 					</a>
-					<h1 class="text-2xl font-bold text-stone-900 mt-1">
-						학습 분석
-					</h1>
+					<h1 class="text-2xl font-bold text-stone-900 mt-1">학습 분석</h1>
 				</div>
 			</div>
 		</div>
@@ -106,9 +103,16 @@
 			</div>
 		{:else if error}
 			<div class="text-center py-12">
-				<div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-rose-100 mb-4">
+				<div
+					class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-rose-100 mb-4"
+				>
 					<svg class="w-8 h-8 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M6 18L18 6M6 6l12 12"
+						></path>
 					</svg>
 				</div>
 				<p class="text-rose-600 font-medium text-lg mb-2">데이터를 불러오지 못했습니다</p>
@@ -182,9 +186,7 @@
 			<!-- Favorite Character -->
 			{#if favoriteChar}
 				<div class="bg-white rounded-xl shadow-sm border border-stone-200 p-6 mb-8">
-					<h2 class="text-lg font-semibold text-stone-900 mb-4">
-						가장 많이 대화한 튜터
-					</h2>
+					<h2 class="text-lg font-semibold text-stone-900 mb-4">가장 많이 대화한 튜터</h2>
 					<div class="flex items-center gap-4">
 						<div class="text-5xl">{favoriteChar.emoji}</div>
 						<div>
@@ -204,20 +206,13 @@
 
 			<!-- Speaking Time Chart -->
 			<div class="bg-white rounded-xl shadow-sm border border-stone-200 p-6 mb-8">
-				<h2 class="text-lg font-semibold text-stone-900 mb-4">
-					연습 시간 추이
-				</h2>
-				<SpeakingTimeChart
-					data={analyticsData.speakingTime}
-					{period}
-				/>
+				<h2 class="text-lg font-semibold text-stone-900 mb-4">연습 시간 추이</h2>
+				<SpeakingTimeChart data={analyticsData.speakingTime} {period} />
 			</div>
 
 			<!-- Streak Calendar -->
 			<div class="bg-white rounded-xl shadow-sm border border-stone-200 p-6 mb-8">
-				<h2 class="text-lg font-semibold text-stone-900 mb-4">
-					연습 캘린더
-				</h2>
+				<h2 class="text-lg font-semibold text-stone-900 mb-4">연습 캘린더</h2>
 				<StreakCalendar
 					practiceDates={analyticsData.streaks.practiceDates}
 					currentStreak={analyticsData.streaks.currentStreak}
@@ -227,16 +222,16 @@
 			<!-- Recent Sessions -->
 			{#if analyticsData.sessions.recentSessions.length > 0}
 				<div class="bg-white rounded-xl shadow-sm border border-stone-200 p-6">
-					<h2 class="text-lg font-semibold text-stone-900 mb-4">
-						최근 대화
-					</h2>
+					<h2 class="text-lg font-semibold text-stone-900 mb-4">최근 대화</h2>
 					<div class="space-y-3">
 						{#each analyticsData.sessions.recentSessions as session (session.sessionId)}
 							{@const charId = Object.keys(CHARACTERS).find(
 								(id) => CHARACTERS[id].label === session.characterName
 							)}
 							{@const char = charId ? CHARACTERS[charId] : null}
-							<div class="flex items-center justify-between p-4 rounded-lg bg-stone-50 hover:bg-stone-100 transition-colors">
+							<div
+								class="flex items-center justify-between p-4 rounded-lg bg-stone-50 hover:bg-stone-100 transition-colors"
+							>
 								<div class="flex items-center gap-3">
 									<div class="text-2xl">{char?.emoji || '🤖'}</div>
 									<div>
@@ -267,12 +262,8 @@
 		{:else}
 			<div class="text-center py-12">
 				<div class="text-6xl mb-4">📊</div>
-				<p class="text-xl font-semibold text-stone-900 mb-2">
-					아직 대화 기록이 없습니다
-				</p>
-				<p class="text-stone-600 mb-6">
-					AI 튜터와 대화를 시작하면 학습 분석이 표시됩니다
-				</p>
+				<p class="text-xl font-semibold text-stone-900 mb-2">아직 대화 기록이 없습니다</p>
+				<p class="text-stone-600 mb-6">AI 튜터와 대화를 시작하면 학습 분석이 표시됩니다</p>
 				<a
 					href={resolveRoute('/')}
 					class="inline-block px-6 py-3 bg-rose-500 text-white rounded-lg hover:bg-rose-600 transition-colors font-medium"

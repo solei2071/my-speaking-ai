@@ -38,7 +38,14 @@ export async function saveMessage(
 			row.character_voice_id = validated.characterVoiceId;
 		}
 
-		const { error } = await supabase.from('conversation_records').insert(row);
+		let { error } = await supabase.from('conversation_records').insert(row);
+
+		// Retry without character_voice_id if column doesn't exist yet
+		if (error && error.message?.includes('character_voice_id')) {
+			console.warn('[Conversation] character_voice_id column not found, retrying without it');
+			delete row.character_voice_id;
+			({ error } = await supabase.from('conversation_records').insert(row));
+		}
 
 		if (error) {
 			console.error('[Conversation] Database insert failed:', error);

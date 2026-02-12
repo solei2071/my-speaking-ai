@@ -1,8 +1,10 @@
 import { env } from '$env/dynamic/private';
 import { CHARACTERS, getCharacter, getVoiceForCharacter } from '$lib/characters.js';
+import { getLevel } from '$lib/levels.js';
 import { validateOrThrow, realtimeTokenRequestSchema } from '$lib/validation/schemas.js';
 
 const VALID_CHAR_IDS = Object.keys(CHARACTERS);
+const VALID_LEVELS = ['beginner', 'intermediate', 'advanced'];
 
 /** @type {import('./$types').RequestHandler} */
 export async function POST({ request }) {
@@ -15,6 +17,7 @@ export async function POST({ request }) {
 	}
 
 	let charId = 'alloy';
+	let levelId = 'intermediate';
 	try {
 		const body = await request.json();
 		// Validate input
@@ -23,6 +26,9 @@ export async function POST({ request }) {
 		if (requested && VALID_CHAR_IDS.includes(requested)) {
 			charId = requested;
 		}
+		if (validated.level && VALID_LEVELS.includes(validated.level)) {
+			levelId = validated.level;
+		}
 	} catch (e) {
 		// Log but continue with default (graceful degradation)
 		console.warn('[Token API] Invalid request body, using default:', e.message);
@@ -30,6 +36,7 @@ export async function POST({ request }) {
 
 	const character = getCharacter(charId);
 	const voice = getVoiceForCharacter(charId);
+	const level = getLevel(levelId);
 	const baseInstructions = `
 CRITICAL - You MUST follow this EXACT format EVERY time the student speaks:
 
@@ -65,7 +72,8 @@ Speak clearly at a moderate pace.
 			audio: {
 				output: { voice }
 			},
-			instructions: `You are ${character.label}, a friendly English conversation teacher for intermediate learners. ${character.personality}
+			instructions: `You are ${character.label}, a friendly English conversation teacher. ${character.personality}
+${level.instructions}
 ${baseInstructions}`
 		}
 	};

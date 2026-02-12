@@ -8,6 +8,7 @@
 	import { saveSentence, fetchSavedSentences, deleteSavedSentence } from '$lib/savedSentences.js';
 	import { getCharacter, voiceOptionsSorted } from '$lib/characters.js';
 	import { getScenario, scenarioOptions } from '$lib/scenarios.js';
+	import { getLevel, levelOptions } from '$lib/levels.js';
 	import { analyzeSpeech } from '$lib/pronunciation.js';
 	import OnboardingModal from '$lib/OnboardingModal.svelte';
 	import { checkOnboardingStatus } from '$lib/profile.js';
@@ -23,6 +24,10 @@
 	let conversationLog = $state([]);
 	let selectedScenario = $state(null);
 	let showScenarioSelector = $state(false);
+	let selectedLevel = $state('intermediate');
+
+	// Mobile tab navigation
+	let mobileTab = $state('controls'); // 'controls' | 'chat'
 
 	// Pronunciation feedback (only available with Web Speech API)
 	let pronunciationEnabled = $state(true);
@@ -354,7 +359,7 @@
 				fetch('/api/realtime-token', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ voice })
+					body: JSON.stringify({ voice, level: selectedLevel })
 				}),
 				10000,
 				'토큰 요청'
@@ -375,12 +380,14 @@
 			}
 
 			const character = getCharacter(voice);
+			const level = getLevel(selectedLevel);
 			const scenarioInstructions = selectedScenario
 				? `\n\nScenario focus: ${selectedScenario.instructions}`
 				: '';
+			const levelInstructions = `\n\n${level.instructions}`;
 			const agent = new RealtimeAgent({
 				name: character.label,
-				instructions: `You are ${character.label}, a friendly English conversation teacher for intermediate learners. ${character.personality}${scenarioInstructions}`
+				instructions: `You are ${character.label}, a friendly English conversation teacher. ${character.personality}${levelInstructions}${scenarioInstructions}`
 			});
 
 			const realtimeSession = new RealtimeSession(agent);
@@ -427,6 +434,7 @@
 			currentCharacterMbti = char.mbti ?? '';
 			currentVoiceId = voice;
 			status = 'connected';
+			mobileTab = 'chat';
 
 			// Try to initialize speech recognition, fallback to text mode if not supported
 			const speechSupported = initSpeechRecognition();
@@ -459,6 +467,63 @@
 	}
 
 	let disconnectMessage = $state('');
+	let sessionSummary = $state(null);
+
+	function buildSessionSummary() {
+		if (conversationLog.length === 0) return null;
+
+		const userMsgs = conversationLog.filter((m) => m.role === 'user');
+		const aiMsgs = conversationLog.filter((m) => m.role === 'assistant');
+		const totalMessages = conversationLog.length;
+		const userWordCount = userMsgs.reduce(
+			(sum, m) => sum + (m.text?.split(/\s+/).filter(Boolean).length || 0),
+			0
+		);
+
+		// Extract useful expressions from AI messages (sentences with quotes or "could also say")
+		const expressions = [];
+		for (const msg of aiMsgs) {
+			const text = msg.text || '';
+			// Match paraphrase suggestions
+			const matches = text.match(
+				/(?:could also say|more naturally|another way|you could say)[:\s]*["']?([^"'\n.!?]+[.!?]?)/gi
+			);
+			if (matches) {
+				for (const m of matches.slice(0, 3)) {
+					const clean = m
+						.replace(/^(?:could also say|more naturally|another way|you could say)[:\s]*["']?/i, '')
+						.replace(/["']$/, '')
+						.trim();
+					if (clean.length > 5 && clean.length < 120) expressions.push(clean);
+				}
+			}
+		}
+
+		// Deduplicate
+		const uniqueExpressions = [...new Set(expressions)].slice(0, 5);
+
+		// Pronunciation average
+		const pronScores = conversationLog
+			.filter((m) => m.pronunciation?.clarityScore)
+			.map((m) => m.pronunciation.clarityScore);
+		const avgClarity =
+			pronScores.length > 0
+				? Math.round(pronScores.reduce((a, b) => a + b, 0) / pronScores.length)
+				: null;
+
+		return {
+			totalMessages,
+			userMessages: userMsgs.length,
+			aiMessages: aiMsgs.length,
+			userWordCount,
+			expressions: uniqueExpressions,
+			avgClarity,
+			character: currentCharacterName,
+			characterEmoji: currentCharacterEmoji,
+			characterMbti: currentCharacterMbti,
+			level: selectedLevel
+		};
+	}
 
 	function disconnect() {
 		stopListening();
@@ -468,6 +533,9 @@
 			clearTimeout(autoSendTimer);
 			autoSendTimer = null;
 		}
+
+		// Build summary before clearing state
+		sessionSummary = buildSessionSummary();
 
 		liveTranscript = '';
 		finalTranscript = '';
@@ -489,14 +557,13 @@
 
 		status = 'disconnected';
 		disconnectMessage = 'Connection closed. No more API calls.';
+	}
 
-		setTimeout(() => {
-			if (status === 'disconnected') {
-				status = 'idle';
-				disconnectMessage = '';
-				error = null;
-			}
-		}, 2000);
+	function dismissSummary() {
+		sessionSummary = null;
+		status = 'idle';
+		disconnectMessage = '';
+		error = null;
 	}
 
 	function safeSendMessage(msg) {
@@ -983,10 +1050,41 @@
 	}
 </script>
 
-<div class="h-screen overflow-hidden bg-stone-50 flex">
+<div class="h-screen overflow-hidden bg-stone-50 flex flex-col lg:flex-row">
+	<!-- Mobile Tab Bar (visible only on small screens) -->
+	{#if status === 'connected'}
+		<div class="flex lg:hidden border-b border-stone-200 bg-white shrink-0">
+			<button
+				onclick={() => (mobileTab = 'controls')}
+				class="flex-1 py-3 text-sm font-medium text-center transition-colors border-b-2
+					{mobileTab === 'controls'
+					? 'border-emerald-500 text-emerald-700 bg-emerald-50/50'
+					: 'border-transparent text-stone-500 hover:text-stone-700'}"
+			>
+				Controls
+			</button>
+			<button
+				onclick={() => (mobileTab = 'chat')}
+				class="flex-1 py-3 text-sm font-medium text-center transition-colors border-b-2
+					{mobileTab === 'chat'
+					? 'border-emerald-500 text-emerald-700 bg-emerald-50/50'
+					: 'border-transparent text-stone-500 hover:text-stone-700'}"
+			>
+				Chat
+				{#if conversationLog.length > 0}
+					<span class="ml-1 px-1.5 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] rounded-full">
+						{conversationLog.length}
+					</span>
+				{/if}
+			</button>
+		</div>
+	{/if}
+
 	<!-- Left: Controls + Input -->
 	<aside
-		class="w-full lg:w-[520px] h-screen flex flex-col bg-white border-r border-stone-200 p-10 lg:p-12 overflow-y-auto shrink-0"
+		class="h-full flex flex-col bg-white border-r border-stone-200 p-6 sm:p-10 lg:p-12 overflow-y-auto shrink-0
+			lg:w-[520px] lg:block
+			{status === 'connected' && mobileTab !== 'controls' ? 'hidden lg:flex' : 'flex-1 lg:flex-none'}"
 	>
 		<div class="flex-1">
 			<!-- User Auth Section -->
@@ -1076,6 +1174,26 @@
 			{/if}
 
 			{#if status === 'idle'}
+				<!-- Difficulty Level Selector -->
+				<div class="mb-6">
+					<p class="text-stone-600 text-base mb-3">Your level</p>
+					<div class="flex gap-2">
+						{#each levelOptions as level (level.id)}
+							<button
+								onclick={() => (selectedLevel = level.id)}
+								class="flex-1 py-2.5 px-3 rounded-xl border text-sm font-medium transition-all text-center
+									{selectedLevel === level.id
+									? 'border-emerald-500 bg-emerald-50 text-emerald-700 shadow-sm'
+									: 'border-stone-200 bg-white text-stone-600 hover:border-stone-300 hover:bg-stone-50'}"
+							>
+								<span class="text-base">{level.emoji}</span>
+								<span class="block text-xs mt-0.5">{level.label}</span>
+								<span class="block text-[10px] text-stone-400">{level.sublabel}</span>
+							</button>
+						{/each}
+					</div>
+				</div>
+
 				<!-- Scenario Selector -->
 				<div class="mb-6">
 					<p class="text-stone-600 text-base mb-3">Choose a scenario (optional)</p>
@@ -1202,27 +1320,108 @@
 					<p class="text-stone-500 text-sm">Connecting...</p>
 				</div>
 			{:else if status === 'disconnected'}
-				<div class="flex flex-col items-center gap-4 py-12">
-					<div class="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
-						<svg
-							class="w-8 h-8 text-emerald-600"
-							fill="none"
-							stroke="currentColor"
-							viewBox="0 0 24 24"
+				{#if sessionSummary}
+					<div class="space-y-4">
+						<!-- Summary Header -->
+						<div
+							class="flex items-center gap-3 p-4 bg-emerald-50 rounded-xl border border-emerald-100"
 						>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M5 13l4 4L19 7"
-							/>
-						</svg>
+							<div
+								class="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center text-xl"
+							>
+								{sessionSummary.characterEmoji || '✅'}
+							</div>
+							<div>
+								<p class="text-emerald-800 font-semibold text-sm">Session Complete!</p>
+								<p class="text-emerald-600 text-xs">
+									{sessionSummary.character}{sessionSummary.characterMbti
+										? ` (${sessionSummary.characterMbti})`
+										: ''}
+								</p>
+							</div>
+						</div>
+
+						<!-- Stats Grid -->
+						<div class="grid grid-cols-3 gap-3">
+							<div class="p-3 bg-stone-50 rounded-xl text-center border border-stone-100">
+								<p class="text-lg font-bold text-stone-800">{sessionSummary.totalMessages}</p>
+								<p class="text-[10px] text-stone-500">Messages</p>
+							</div>
+							<div class="p-3 bg-stone-50 rounded-xl text-center border border-stone-100">
+								<p class="text-lg font-bold text-stone-800">{sessionSummary.userWordCount}</p>
+								<p class="text-[10px] text-stone-500">Words spoken</p>
+							</div>
+							<div class="p-3 bg-stone-50 rounded-xl text-center border border-stone-100">
+								{#if sessionSummary.avgClarity}
+									<p
+										class="text-lg font-bold {sessionSummary.avgClarity >= 80
+											? 'text-emerald-600'
+											: sessionSummary.avgClarity >= 60
+												? 'text-amber-600'
+												: 'text-rose-600'}"
+									>
+										{sessionSummary.avgClarity}%
+									</p>
+									<p class="text-[10px] text-stone-500">Clarity</p>
+								{:else}
+									<p class="text-lg font-bold text-stone-800">{sessionSummary.userMessages}</p>
+									<p class="text-[10px] text-stone-500">Your turns</p>
+								{/if}
+							</div>
+						</div>
+
+						<!-- Learned Expressions -->
+						{#if sessionSummary.expressions.length > 0}
+							<div class="p-4 bg-amber-50 rounded-xl border border-amber-100">
+								<p class="text-amber-800 font-medium text-xs mb-2">Expressions from this session</p>
+								<ul class="space-y-1.5">
+									{#each sessionSummary.expressions as expr, i (i)}
+										<li class="text-amber-900 text-sm flex items-start gap-2">
+											<span class="text-amber-500 mt-0.5 shrink-0">•</span>
+											<span class="italic">"{expr}"</span>
+										</li>
+									{/each}
+								</ul>
+							</div>
+						{/if}
+
+						<!-- Action Buttons -->
+						<button
+							onclick={dismissSummary}
+							class="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-medium text-sm transition-colors"
+						>
+							Practice again
+						</button>
 					</div>
-					<div class="text-center">
-						<p class="text-emerald-700 font-medium text-sm">Disconnected</p>
-						<p class="text-stone-500 text-xs mt-1">{disconnectMessage}</p>
+				{:else}
+					<div class="flex flex-col items-center gap-4 py-12">
+						<div class="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
+							<svg
+								class="w-8 h-8 text-emerald-600"
+								fill="none"
+								stroke="currentColor"
+								viewBox="0 0 24 24"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M5 13l4 4L19 7"
+								/>
+							</svg>
+						</div>
+						<div class="text-center">
+							<p class="text-emerald-700 font-medium text-sm">Disconnected</p>
+							<p class="text-stone-500 text-xs mt-1">{disconnectMessage}</p>
+						</div>
+						<button
+							onclick={dismissSummary}
+							class="px-6 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-600 text-sm font-medium transition-colors"
+						>
+							Back to home
+						</button>
 					</div>
-				</div>
+				{/if}
 			{:else if status === 'error'}
 				<div class="space-y-4">
 					<p class="text-stone-600 text-sm mb-3">
@@ -1622,7 +1821,10 @@
 	</aside>
 
 	<!-- Right: Conversation or History -->
-	<main class="flex-1 flex flex-col min-h-0 overflow-hidden">
+	<main
+		class="flex-1 flex flex-col min-h-0 overflow-hidden
+		{status === 'connected' && mobileTab !== 'chat' ? 'hidden lg:flex' : ''}"
+	>
 		<div class="flex-1 flex flex-col min-h-0 p-8 lg:p-12">
 			{#if savedView}
 				<div

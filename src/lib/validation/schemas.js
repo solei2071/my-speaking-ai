@@ -43,7 +43,8 @@ export const fetchSessionMessagesSchema = z.object({
 // API 스키마
 export const realtimeTokenRequestSchema = z.object({
 	voice: z.string().max(50).optional(),
-	character: z.string().max(50).optional()
+	character: z.string().max(50).optional(),
+	level: z.enum(['beginner', 'intermediate', 'advanced']).optional()
 });
 
 // Analytics 스키마

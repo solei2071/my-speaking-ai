@@ -44,15 +44,38 @@
 	// AI speaking state
 	let isSpeaking = $state(false);
 	let streamingText = $state('');
+	let transcriptEventActive = false;
+
+	// Word-by-word reveal (syncs text display with speaking pace)
+	const CHAR_REVEAL_MS = 25;
+	let isRevealing = $state(false);
+	let displayedText = $state('');
+	let revealTargetText = '';
+	let revealInterval = null;
+	let revealedCharCount = 0;
 
 	// Auto-send timer
 	let autoSendTimer = $state(null);
 
 	// Auto-send mode: 말이 끝나면 자동 전송
 	let autoSendEnabled = $state(false);
-	let autoSendDelay = 1000; // 침묵 후 자동 전송까지 대기 시간 (ms)
+	let autoSendDelay = 1500; // 침묵 후 자동 전송까지 대기 시간 (ms)
+	let autoSendFillerDelay = 3000; // 필러로 끝날 때 더 긴 대기 시간 (ms)
 	let autoSendCountdown = $state(0); // 카운트다운 표시용
 	let autoSendCountdownInterval = null;
+
+	// 영어 필러(추임새) 패턴
+	const FILLER_PATTERNS = [
+		/\b(um+|uh+|er+|ah+|hm+|hmm+|umm+|uhh+)\s*\.?$/i,
+		/\b(like|you know|i mean|so|well|basically|actually|literally|right)\s*\.?$/i,
+		/\b(let me think|let me see|how do i say|what's the word)\s*\.?$/i,
+		/\b(it's like|kind of|sort of|i guess|i think)\s*\.?$/i
+	];
+
+	function endsWithFiller(text) {
+		const trimmed = text.trim();
+		return FILLER_PATTERNS.some((pattern) => pattern.test(trimmed));
+	}
 
 	// Cleanup tracking
 	let cleanupFns = [];
@@ -80,6 +103,10 @@
 		if (autoSendTimer) {
 			clearTimeout(autoSendTimer);
 			autoSendTimer = null;
+		}
+		if (revealInterval) {
+			clearInterval(revealInterval);
+			revealInterval = null;
 		}
 
 		if (recognition) {
@@ -126,6 +153,44 @@
 		}
 	}
 
+	// --- Character-by-character reveal ---
+	function startReveal(text) {
+		revealTargetText = text;
+		// If already revealing, just update target — timer picks up new chars
+		if (isRevealing && revealInterval) return;
+
+		isRevealing = true;
+		revealedCharCount = 0;
+		displayedText = '';
+
+		if (revealInterval) clearInterval(revealInterval);
+		revealInterval = setInterval(() => {
+			if (revealedCharCount < revealTargetText.length) {
+				revealedCharCount++;
+				displayedText = revealTargetText.slice(0, revealedCharCount);
+				requestAnimationFrame(() => {
+					if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
+				});
+			} else if (!isSpeaking) {
+				// All chars shown and AI finished — stop
+				stopReveal();
+			}
+			// If isSpeaking, keep timer alive for more chars
+		}, CHAR_REVEAL_MS);
+	}
+
+	function stopReveal() {
+		if (revealInterval) {
+			clearInterval(revealInterval);
+			revealInterval = null;
+		}
+		if (revealTargetText) {
+			displayedText = revealTargetText;
+		}
+		isRevealing = false;
+		revealedCharCount = 0;
+	}
+
 	// Save assistant message to DB, but only once per unique text
 	function saveAssistantToDb(text) {
 		if (!$user || !currentSessionId || !text?.trim()) return;
@@ -145,23 +210,30 @@
 	function handleServerEvent(event) {
 		if (!event?.type) return;
 
-		// Audio transcript delta - real-time text as AI speaks
+		// Response started — reset streaming state
+		if (event.type === 'response.created' || event.type === 'response.output_item.added') {
+			isSpeaking = true;
+			streamingText = '';
+			transcriptEventActive = false;
+		}
+
+		// Audio transcript delta — accumulate text at speaking pace
+		// (only if `transcript` event hasn't already handled it)
 		if (event.type === 'response.audio_transcript.delta') {
 			const delta = event.delta || '';
 			if (delta) {
 				isSpeaking = true;
-				streamingText += delta;
-				updateStreamingMessage(streamingText);
+				// Only accumulate here; the `transcript` listener may also fire.
+				// We guard against duplicates by letting `transcript` set the full text
+				// when available, which overwrites any partial accumulation.
+				if (!transcriptEventActive) {
+					streamingText += delta;
+					updateStreamingMessage(streamingText);
+				}
 			}
 		}
 
-		// Response started
-		if (event.type === 'response.created' || event.type === 'response.output_item.added') {
-			isSpeaking = true;
-			streamingText = '';
-		}
-
-		// Response done - finalize the message
+		// Response done — finalize the message
 		if (event.type === 'response.audio_transcript.done') {
 			isSpeaking = false;
 			finalizeStreamingMessage();
@@ -194,9 +266,11 @@
 
 		const lastIndex = conversationLog.length - 1;
 		const lastMsg = conversationLog[lastIndex];
+		let added = false;
 
 		if (lastMsg?.role === 'user' || (!lastMsg && conversationLog.length === 0)) {
 			conversationLog = [...conversationLog, { role: 'assistant', text, isStreaming: true }];
+			added = true;
 		} else if (lastMsg?.isStreaming) {
 			conversationLog = [
 				...conversationLog.slice(0, -1),
@@ -207,8 +281,13 @@
 			const assistantCount = conversationLog.filter((m) => m.role === 'assistant').length;
 			if (userCount > assistantCount) {
 				conversationLog = [...conversationLog, { role: 'assistant', text, isStreaming: true }];
+				added = true;
 			}
 		}
+
+		// Update reveal target (timer continues revealing words)
+		revealTargetText = text;
+		if (added || !isRevealing) startReveal(text);
 
 		requestAnimationFrame(() => {
 			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
@@ -232,21 +311,28 @@
 			const lastMsg = conversationLog[conversationLog.length - 1];
 
 			if (lastMsg?.isStreaming) {
+				// Replace streaming placeholder with final text
 				conversationLog = [
 					...conversationLog.slice(0, -1),
 					{ role: 'assistant', text: latestCompletedText }
 				];
 				isSpeaking = false;
 				saveAssistantToDb(latestCompletedText);
+				// Continue reveal if already running, otherwise start
+				revealTargetText = latestCompletedText;
+				if (!isRevealing) startReveal(latestCompletedText);
 			} else if (lastMsg?.role === 'user') {
 				conversationLog = [...conversationLog, { role: 'assistant', text: latestCompletedText }];
 				saveAssistantToDb(latestCompletedText);
+				startReveal(latestCompletedText);
 			} else if (lastMsg?.role === 'assistant' && lastMsg.text !== latestCompletedText) {
 				conversationLog = [
 					...conversationLog.slice(0, -1),
 					{ role: 'assistant', text: latestCompletedText }
 				];
 				saveAssistantToDb(latestCompletedText);
+				revealTargetText = latestCompletedText;
+				if (!isRevealing) startReveal(latestCompletedText);
 			}
 		}
 
@@ -320,9 +406,14 @@
 
 			addCleanableListener(realtimeSession, 'transcript', (data) => {
 				if (data?.text || data?.delta) {
+					transcriptEventActive = true;
 					isSpeaking = true;
-					streamingText += data.delta || '';
-					if (data.text) streamingText = data.text;
+					if (data.text) {
+						// Full text provided — use directly (prevents duplication)
+						streamingText = data.text;
+					} else if (data.delta) {
+						streamingText += data.delta;
+					}
 					updateStreamingMessage(streamingText);
 				}
 			});
@@ -382,6 +473,7 @@
 		finalTranscript = '';
 		isSpeaking = false;
 		streamingText = '';
+		stopReveal();
 
 		if (session) {
 			try {
@@ -424,6 +516,7 @@
 		const text = textInput.trim();
 		if (!text || !session) return;
 
+		stopReveal();
 		conversationLog = [...conversationLog, { role: 'user', text }];
 		requestAnimationFrame(() => {
 			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
@@ -713,6 +806,7 @@
 		const text = liveTranscript.trim();
 		if (!text || !session) return;
 
+		stopReveal();
 		const wasListening = isListening;
 		if (recognition) {
 			try {
@@ -768,24 +862,39 @@
 		if (isSpeaking) return;
 
 		cancelAutoSendCountdown();
-		autoSendCountdown = Math.ceil(autoSendDelay / 1000);
+
+		// 필러(추임새)로 끝나면 더 긴 딜레이 적용
+		const hasFiller = endsWithFiller(liveTranscript);
+		const delay = hasFiller ? autoSendFillerDelay : autoSendDelay;
+		autoSendCountdown = Math.ceil(delay / 1000);
 
 		autoSendCountdownInterval = setInterval(() => {
 			autoSendCountdown -= 1;
 			if (autoSendCountdown <= 0) {
-				cancelAutoSendCountdown();
+				// 카운트다운 UI만 정리 (전송 타이머는 건드리지 않음)
+				if (autoSendCountdownInterval) {
+					clearInterval(autoSendCountdownInterval);
+					autoSendCountdownInterval = null;
+				}
+				autoSendCountdown = 0;
 			}
 		}, 1000);
 
 		autoSendTimer = setTimeout(() => {
-			cancelAutoSendCountdown();
+			// 카운트다운 UI 정리
+			if (autoSendCountdownInterval) {
+				clearInterval(autoSendCountdownInterval);
+				autoSendCountdownInterval = null;
+			}
+			autoSendCountdown = 0;
+			autoSendTimer = null;
 			if (liveTranscript.trim() && autoSendEnabled && !isSpeaking) {
 				sendVoiceMessage();
 			}
-		}, autoSendDelay);
+		}, delay);
 	}
 
-	/** Auto Send 카운트다운 취소 */
+	/** Auto Send 카운트다운 취소 (사용자가 직접 취소하거나 새 입력이 들어올 때) */
 	function cancelAutoSendCountdown() {
 		if (autoSendCountdownInterval) {
 			clearInterval(autoSendCountdownInterval);
@@ -975,7 +1084,7 @@
 							onclick={() => (showScenarioSelector = !showScenarioSelector)}
 							class="flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border text-sm font-medium transition-all
 								{selectedScenario
-								? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+								? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
 								: 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'}"
 						>
 							<span class="text-base">{selectedScenario?.emoji || '🎯'}</span>
@@ -1026,7 +1135,7 @@
 									}}
 									class="py-2 px-3 rounded-lg border transition-all text-sm font-medium text-left
 										{selectedScenario?.id === scenario.id
-										? 'border-rose-500 bg-rose-100 text-rose-700'
+										? 'border-emerald-500 bg-emerald-100 text-emerald-700'
 										: 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-100'}"
 								>
 									<span class="mr-1.5">{scenario.emoji}</span>
@@ -1037,12 +1146,12 @@
 					{/if}
 
 					{#if selectedScenario}
-						<div class="mt-3 p-3 rounded-lg bg-rose-50 border border-rose-100">
-							<p class="text-rose-900 font-medium text-sm mb-1">
+						<div class="mt-3 p-3 rounded-lg bg-emerald-50 border border-emerald-100">
+							<p class="text-emerald-900 font-medium text-sm mb-1">
 								{selectedScenario.emoji}
 								{selectedScenario.label}
 							</p>
-							<p class="text-rose-700 text-xs">{selectedScenario.description}</p>
+							<p class="text-emerald-700 text-xs">{selectedScenario.description}</p>
 						</div>
 					{/if}
 				</div>
@@ -1227,7 +1336,7 @@
 							onclick={() => (showScenarioSelector = !showScenarioSelector)}
 							class="flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg border text-sm font-medium transition-all
 								{selectedScenario
-								? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+								? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
 								: 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'}"
 						>
 							<span class="text-base">{selectedScenario?.emoji || '🎯'}</span>
@@ -1278,7 +1387,7 @@
 									}}
 									class="py-2 px-3 rounded-lg border transition-all text-sm font-medium text-left
 										{selectedScenario?.id === scenario.id
-										? 'border-rose-500 bg-rose-100 text-rose-700'
+										? 'border-emerald-500 bg-emerald-100 text-emerald-700'
 										: 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-100'}"
 								>
 									<span class="mr-1.5">{scenario.emoji}</span>
@@ -1803,8 +1912,11 @@
 							{#each conversationLog as msg, i (i)}
 								{@const isLastAssistant =
 									msg.role === 'assistant' && i === conversationLog.length - 1}
-								{@const showSpeaking = isLastAssistant && (msg.isStreaming || isSpeaking)}
-								{@const canSave = msg.role === 'assistant' && !msg.isStreaming && $user}
+								{@const isThisRevealing = isLastAssistant && isRevealing}
+								{@const showSpeaking =
+									isLastAssistant && (isRevealing || msg.isStreaming || isSpeaking)}
+								{@const canSave =
+									msg.role === 'assistant' && !msg.isStreaming && !isThisRevealing && $user}
 								<div class="flex {msg.role === 'user' ? 'justify-end' : 'justify-start'}">
 									<div
 										class="max-w-[85%] rounded-2xl px-5 py-4 text-base {msg.role === 'user'
@@ -1833,7 +1945,11 @@
 												</span>
 											{/if}
 										</span>
-										<p class="whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
+										<p class="whitespace-pre-wrap break-words leading-relaxed">
+											{isThisRevealing ? displayedText : msg.text}{#if showSpeaking}<span
+													class="typing-cursor"
+												></span>{/if}
+										</p>
 
 										<!-- Pronunciation Feedback -->
 										{#if msg.role === 'user' && msg.pronunciation && pronunciationEnabled}
@@ -1953,5 +2069,25 @@
 
 	:global(.animate-slide-in-left) {
 		animation: slideInLeft 0.6s ease-out;
+	}
+
+	@keyframes blink {
+		0%,
+		100% {
+			opacity: 1;
+		}
+		50% {
+			opacity: 0;
+		}
+	}
+
+	.typing-cursor {
+		display: inline-block;
+		width: 2px;
+		height: 1em;
+		background-color: currentColor;
+		margin-left: 1px;
+		vertical-align: text-bottom;
+		animation: blink 0.8s step-end infinite;
 	}
 </style>

@@ -1,14 +1,24 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(npm outdated:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(npm run format:*)",
-      "Bash(git push:*)",
-      "Bash(npm run dev:*)",
-      "Bash(dir:*)",
-      "Bash(npm install:*)"
-    ]
-  }
+	"permissions": {
+		"allow": [
+			"Bash(npm outdated:*)",
+			"Bash(git add:*)",
+			"Bash(git commit:*)",
+			"Bash(npm run format:*)",
+			"Bash(git push:*)",
+			"Bash(npm run dev:*)",
+			"Bash(dir:*)",
+			"Bash(npm install:*)",
+			"Bash(grep:*)",
+			"Bash(npx svelte-check:*)",
+			"Bash(curl:*)",
+			"Bash(npm run build:*)",
+			"Bash(xxd:*)",
+			"WebSearch",
+			"WebFetch(domain:community.openai.com)",
+			"WebFetch(domain:platform.openai.com)",
+			"WebFetch(domain:ttsopen.ai)",
+			"Bash(find:*)"
+		]
+	}
 }

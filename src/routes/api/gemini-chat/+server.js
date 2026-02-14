@@ -8,7 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 
 const VALID_CHAR_IDS = Object.keys(CHARACTERS);
 const VALID_LEVELS = ['beginner', 'intermediate', 'advanced'];
-const VALID_MODEL = 'gemini-2.5-flash';
+const MODEL_CANDIDATES = ['gemini-2.5-flash', 'gemini-1.5-flash'];
 const DAILY_REQUEST_LIMIT = 30;
 
 const RATE_LIMIT_WINDOW_MS = Number.parseInt(env.GEMINI_RATE_LIMIT_WINDOW_MS || '60000', 10);
@@ -115,6 +115,62 @@ STEP 3 - Your response to continue the conversation.
 
 You must keep the response natural, encouraging, and concise.
 `;
+}
+
+function summarizeGeminiError(err) {
+	if (!err) return '다시 시도하거나 네트워크 연결을 확인해주세요.';
+
+	const msg = (err.message || '').toLowerCase();
+	if (msg.includes('api key') || msg.includes('api_key') || msg.includes('apikey')) {
+		return 'API 키 설정 오류입니다. GEMINI_API_KEY 또는 GOOGLE_API_KEY를 다시 확인하세요.';
+	}
+
+	if (msg.includes('quota') || msg.includes('rate limit') || msg.includes('billing')) {
+		return '현재 Gemini 사용 한도에 도달했거나 결제 상태를 확인해야 합니다.';
+	}
+
+	if (msg.includes('permission') || msg.includes('forbidden') || msg.includes('unauthorized')) {
+		return 'Gemini API 권한이 없습니다. API 키 권한 및 도메인/IP 제한을 확인하세요.';
+	}
+
+	if (msg.includes('model') || msg.includes('not found') || msg.includes('404')) {
+		return '지원되지 않는 Gemini 모델입니다. 모델 버전을 확인해주세요.';
+	}
+
+	if (msg.includes('network') || msg.includes('failed to fetch')) {
+		return '네트워크 연결을 확인하고 잠시 후 다시 시도해주세요.';
+	}
+
+	return err.message || '다시 시도하거나 네트워크 연결을 확인해주세요.';
+}
+
+async function generateGeminiContent(ai, payload) {
+	let lastError = null;
+	for (const model of MODEL_CANDIDATES) {
+		try {
+			return await ai.models.generateContent({
+				...payload,
+				model
+			});
+		} catch (err) {
+			lastError = err;
+			const errorMessage = (err?.message || '').toLowerCase();
+			console.warn('[Gemini Chat API] model attempt failed', {
+				model,
+				message: err?.message
+			});
+
+			if (
+				!errorMessage.includes('not found') &&
+				!errorMessage.includes('404') &&
+				!errorMessage.includes('model')
+			) {
+				throw err;
+			}
+		}
+	}
+
+	throw lastError;
 }
 
 function extractResponseText(data) {
@@ -230,12 +286,18 @@ export async function POST({ request }) {
 			parts: [{ text: m.text }]
 		}));
 
+	if (filteredMessages.length === 0) {
+		filteredMessages.push({
+			role: 'user',
+			parts: [{ text: 'Start our conversation with a short English warm-up question.' }]
+		});
+	}
+
 	const instruction = `${buildBaseInstructions()}\n\nYou are ${character.label}, a friendly English conversation teacher. ${character.personality}${levelInstructions}${scenarioInstructions}`;
 
 	try {
 		const ai = new GoogleGenAI({ apiKey });
-		const response = await ai.models.generateContent({
-			model: VALID_MODEL,
+		const response = await generateGeminiContent(ai, {
 			contents: filteredMessages,
 			config: {
 				systemInstruction: instruction,
@@ -269,7 +331,7 @@ export async function POST({ request }) {
 		return new Response(
 			JSON.stringify({
 				error: 'Gemini request failed',
-				message: e?.message ?? '다시 시도하거나 네트워크 연결을 확인해주세요.'
+				message: summarizeGeminiError(e)
 			}),
 			{ status: 500, headers: { 'Content-Type': 'application/json' } }
 		);

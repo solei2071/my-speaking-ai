@@ -11,6 +11,15 @@ const VALID_LEVELS = ['beginner', 'intermediate', 'advanced'];
 const MODEL_CANDIDATES = ['gemini-2.5-flash', 'gemini-1.5-flash'];
 const DAILY_REQUEST_LIMIT = 30;
 
+const CONVERSATION_STYLES = [
+	'curious',
+	'energetic',
+	'practical',
+	'reflective',
+	'playful',
+	'challenging'
+];
+
 const RATE_LIMIT_WINDOW_MS = Number.parseInt(env.GEMINI_RATE_LIMIT_WINDOW_MS || '60000', 10);
 const RATE_LIMIT_MAX_REQUESTS = Number.parseInt(env.GEMINI_RATE_LIMIT_MAX || '20', 10);
 const rateState = new Map();
@@ -95,25 +104,50 @@ function incrementDailyQuota(userId) {
 	}
 }
 
-function buildBaseInstructions() {
+function pickStyle(turnCount) {
+	return CONVERSATION_STYLES[turnCount % CONVERSATION_STYLES.length];
+}
+
+function buildBaseInstructions(turnCount = 0) {
+	const style = pickStyle(turnCount);
+	const styleRules = {
+		curious: 'Ask one follow-up question every time, and keep your tone curious and interactive.',
+		energetic:
+			'Keep the answer lively, short, and engaging. Give the student a mini action or quick challenge.',
+		practical: 'Use concrete examples and keep language practical for daily use.',
+		reflective:
+			'Use more nuanced reflection, then guide the student to expand their response naturally.',
+		playful: 'Add a light playful tone, but keep the correction accurate and supportive.',
+		challenging:
+			'Challenge the student a bit: suggest one stronger word choice or advanced version when appropriate.'
+	};
+
+	const followupHint = `\n\nConversation style for this turn: ${style}. ${styleRules[style]}`;
+
+	const depthHint =
+		turnCount > 6
+			? 'Focus on advancing the conversation: move to slightly higher-level expressions.'
+			: 'Focus on confidence building and clear correction first.';
+
 	return `You are a friendly English conversation teacher.
 
-CRITICAL - You MUST follow this format EVERY time the student speaks:
+CRITICAL - Each response should feel natural and slightly different in rhythm.
+Avoid repetitive sentence patterns and avoid saying the same structure every turn.
 
-STEP 1 - Grammar correction (if needed):
-- If there are mistakes, say: "Just a small fix: [corrected sentence]"
-- If perfect, say "Perfect grammar!"
+STEP 1 - Quick feedback:
+- If there are mistakes, include: "Just a small fix: [corrected sentence]"
+- If perfect, include: "Perfect grammar!"
 
-STEP 2 - Natural paraphrase variations (ALWAYS do this):
-- Give 2-3 more natural ways to say it
-- Format exactly like this:
-  "You could also say: [variation 1]"
-  "Or more naturally: [variation 2]"
-  "Another way: [variation 3]"
+STEP 2 - Natural paraphrase variations:
+- Give 2~3 natural alternatives using different wording patterns.
+- Prefer variety across turns. Do not reuse the exact same opening phrases.
 
-STEP 3 - Your response to continue the conversation.
+STEP 3 - Keep the conversation going:
+- End with ONE short follow-up question or mini challenge so the user must respond.
 
 You must keep the response natural, encouraging, and concise.
+${depthHint}
+${followupHint}
 `;
 }
 
@@ -293,7 +327,7 @@ export async function POST({ request }) {
 		});
 	}
 
-	const instruction = `${buildBaseInstructions()}\n\nYou are ${character.label}, a friendly English conversation teacher. ${character.personality}${levelInstructions}${scenarioInstructions}`;
+	const instruction = `${buildBaseInstructions(filteredMessages.length / 2)}\n\nYou are ${character.label}, a friendly English conversation teacher. ${character.personality}${levelInstructions}${scenarioInstructions}`;
 
 	try {
 		const ai = new GoogleGenAI({ apiKey });

@@ -80,16 +80,19 @@ function hasDailyQuota(userId) {
 	const key = `${userId}:${today}`;
 	const count = dailyUsage.get(key) || 0;
 
-	if (count >= DAILY_REQUEST_LIMIT) return false;
+	return count < DAILY_REQUEST_LIMIT;
+}
 
+function incrementDailyQuota(userId) {
+	const today = new Date().toISOString().split('T')[0];
+	const key = `${userId}:${today}`;
+	const count = dailyUsage.get(key) || 0;
 	dailyUsage.set(key, count + 1);
 
 	// Clean up old entries
 	for (const [k] of dailyUsage) {
 		if (!k.endsWith(today)) dailyUsage.delete(k);
 	}
-
-	return true;
 }
 
 function buildBaseInstructions() {
@@ -247,6 +250,8 @@ export async function POST({ request }) {
 				headers: { 'Content-Type': 'application/json' }
 			});
 		}
+
+		incrementDailyQuota(userId);
 
 		return new Response(
 			JSON.stringify({

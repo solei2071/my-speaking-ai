@@ -5,7 +5,8 @@
 	import { user, authLoading, signOut, onboardingComplete, onboardingLoading } from '$lib/auth.js';
 	import { saveMessage, fetchSessions, fetchSessionMessages } from '$lib/conversation.js';
 	import { saveSentence, fetchSavedSentences, deleteSavedSentence } from '$lib/savedSentences.js';
-	import { getCharacter, voiceOptionsSorted } from '$lib/characters.js';
+	import { getCharacter, getTtsParams, voiceOptionsSorted } from '$lib/characters.js';
+	import { supabase } from '$lib/supabase.js';
 	import { getScenario, scenarioOptions } from '$lib/scenarios.js';
 	import { levelOptions } from '$lib/levels.js';
 	import { analyzeSpeech } from '$lib/pronunciation.js';
@@ -212,6 +213,62 @@
 		isSpeaking = false;
 	}
 
+	function clampTtsValue(value, min, max, fallback) {
+		const num = Number(value);
+		if (!Number.isFinite(num)) return fallback;
+		return Math.min(max, Math.max(min, num));
+	}
+
+	function getPreferredEnglishVoice() {
+		if (!speechSynthesisSupported || typeof window === 'undefined') return null;
+
+		const voices = window.speechSynthesis.getVoices() || [];
+		if (!voices.length) return null;
+
+		const englishVoices = voices.filter((v) => v.lang && v.lang.toLowerCase().startsWith('en'));
+		const candidates = [
+			'Google US English',
+			'Samantha',
+			'Google UK English Female',
+			'Google UK English Male'
+		];
+
+		for (const preferred of candidates) {
+			const exact = englishVoices.find(
+				(v) => v.name.toLowerCase() === preferred.toLowerCase() || v.name.includes(preferred)
+			);
+			if (exact) return exact;
+		}
+
+		return (
+			englishVoices.find((v) => v.lang === 'en-US') ||
+			englishVoices.find((v) => v.lang?.toLowerCase().startsWith('en-')) ||
+			englishVoices[0] ||
+			null
+		);
+	}
+
+	async function resolveVoicePreferences() {
+		if (!speechSynthesisSupported || typeof window === 'undefined') return null;
+
+		const immediate = getPreferredEnglishVoice();
+		if (immediate) return immediate;
+
+		return new Promise((resolve) => {
+			const onvoiceschanged = () => {
+				window.speechSynthesis.removeEventListener('voiceschanged', onvoiceschanged);
+				resolve(getPreferredEnglishVoice());
+			};
+
+			window.speechSynthesis.addEventListener('voiceschanged', onvoiceschanged);
+
+			setTimeout(() => {
+				window.speechSynthesis.removeEventListener('voiceschanged', onvoiceschanged);
+				resolve(getPreferredEnglishVoice());
+			}, 300);
+		});
+	}
+
 	function speakAssistantText(text) {
 		return new Promise((resolve) => {
 			if (!speechSynthesisSupported || typeof window === 'undefined' || !text) {
@@ -223,8 +280,9 @@
 
 			const utterance = new SpeechSynthesisUtterance(text);
 			utterance.lang = 'en-US';
-			utterance.rate = 1;
-			utterance.pitch = 1;
+			const tts = getTtsParams(currentVoiceId);
+			utterance.rate = clampTtsValue(tts.rate, 0.5, 2, 1);
+			utterance.pitch = clampTtsValue(tts.pitch, 0.5, 2, 1);
 			utterance.onstart = () => {
 				isSpeaking = true;
 			};
@@ -238,7 +296,10 @@
 			};
 
 			try {
-				window.speechSynthesis.speak(utterance);
+				resolveVoicePreferences().then((voice) => {
+					if (voice) utterance.voice = voice;
+					window.speechSynthesis.speak(utterance);
+				});
 			} catch {
 				isSpeaking = false;
 				resolve();
@@ -264,12 +325,27 @@
 
 		let controller = new AbortController();
 		activeRequestController = controller;
+		let authHeader;
 
 		try {
+			const {
+				data: { session: authSession }
+			} = await supabase.auth.getSession();
+			authHeader = authSession?.access_token ? `Bearer ${authSession.access_token}` : undefined;
+		} catch {
+			authHeader = undefined;
+		}
+
+		try {
+			const headers = {
+				'Content-Type': 'application/json',
+				...(authHeader ? { Authorization: authHeader } : {})
+			};
+
 			const res = await withTimeout(
 				fetch('/api/gemini-chat', {
 					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
+					headers,
 					body: JSON.stringify(payload),
 					signal: controller.signal
 				}),
@@ -278,8 +354,20 @@
 			);
 			activeRequestController = null;
 
-			const data = await res.json();
+			let data = {};
+			try {
+				data = await res.json();
+			} catch {
+				data = {};
+			}
+
 			if (!res.ok) {
+				if (res.status === 401) {
+					throw new Error('로그인이 필요합니다');
+				}
+				if (res.status === 429) {
+					throw new Error('일일 한도 초과');
+				}
 				throw new Error(data?.error || data?.message || '응답 실패');
 			}
 

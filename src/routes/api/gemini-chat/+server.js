@@ -1,16 +1,20 @@
 import { env } from '$env/dynamic/private';
-import { CHARACTERS, getCharacter, getVoiceForCharacter } from '$lib/characters.js';
+import { env as publicEnv } from '$env/dynamic/public';
+import { CHARACTERS, getCharacter } from '$lib/characters.js';
 import { getLevel } from '$lib/levels.js';
 import { GoogleGenAI } from '@google/genai';
 import { geminiChatRequestSchema, validateOrThrow } from '$lib/validation/schemas.js';
+import { createClient } from '@supabase/supabase-js';
 
 const VALID_CHAR_IDS = Object.keys(CHARACTERS);
 const VALID_LEVELS = ['beginner', 'intermediate', 'advanced'];
 const VALID_MODEL = 'gemini-2.5-flash';
+const DAILY_REQUEST_LIMIT = 30;
 
 const RATE_LIMIT_WINDOW_MS = Number.parseInt(env.GEMINI_RATE_LIMIT_WINDOW_MS || '60000', 10);
 const RATE_LIMIT_MAX_REQUESTS = Number.parseInt(env.GEMINI_RATE_LIMIT_MAX || '20', 10);
 const rateState = new Map();
+const dailyUsage = new Map();
 
 function getClientKey(request) {
 	const forwardedFor = request.headers.get('x-forwarded-for');
@@ -50,6 +54,42 @@ function hasRemainingQuota(clientKey) {
 	}
 
 	return false;
+}
+
+async function authenticateUser(request) {
+	const authHeader = request.headers.get('authorization');
+	if (!authHeader?.startsWith('Bearer ')) return null;
+
+	const token = authHeader.slice(7);
+	const supabase = createClient(
+		publicEnv.PUBLIC_SUPABASE_URL || '',
+		publicEnv.PUBLIC_SUPABASE_ANON_KEY || '',
+		{ global: { headers: { Authorization: `Bearer ${token}` } } }
+	);
+
+	const {
+		data: { user },
+		error
+	} = await supabase.auth.getUser(token);
+	if (error || !user) return null;
+	return user.id;
+}
+
+function hasDailyQuota(userId) {
+	const today = new Date().toISOString().split('T')[0];
+	const key = `${userId}:${today}`;
+	const count = dailyUsage.get(key) || 0;
+
+	if (count >= DAILY_REQUEST_LIMIT) return false;
+
+	dailyUsage.set(key, count + 1);
+
+	// Clean up old entries
+	for (const [k] of dailyUsage) {
+		if (!k.endsWith(today)) dailyUsage.delete(k);
+	}
+
+	return true;
 }
 
 function buildBaseInstructions() {
@@ -98,6 +138,30 @@ function extractResponseText(data) {
 
 /** @type {import('./$types').RequestHandler} */
 export async function POST({ request }) {
+	// 1. 인증 체크 - 로그인 필수
+	const userId = await authenticateUser(request);
+	if (!userId) {
+		return new Response(
+			JSON.stringify({
+				error: 'Authentication required',
+				message: '로그인이 필요합니다.'
+			}),
+			{ status: 401, headers: { 'Content-Type': 'application/json' } }
+		);
+	}
+
+	// 2. 일일 사용량 체크
+	if (!hasDailyQuota(userId)) {
+		return new Response(
+			JSON.stringify({
+				error: 'Daily limit exceeded',
+				message: `일일 사용 한도(${DAILY_REQUEST_LIMIT}회)를 초과했습니다. 내일 다시 이용해주세요.`
+			}),
+			{ status: 429, headers: { 'Content-Type': 'application/json' } }
+		);
+	}
+
+	// 3. IP 기반 속도 제한
 	const clientKey = getClientKey(request);
 	if (!hasRemainingQuota(clientKey)) {
 		const windowMs =
@@ -152,7 +216,6 @@ export async function POST({ request }) {
 	}
 
 	const character = getCharacter(characterId);
-	const voice = getVoiceForCharacter(characterId);
 	const level = getLevel(levelId);
 	const levelInstructions = `\n\n${level.instructions}`;
 	const filteredMessages = messages
@@ -188,7 +251,6 @@ export async function POST({ request }) {
 		return new Response(
 			JSON.stringify({
 				text: responseText,
-				voice,
 				character: {
 					name: character.label,
 					emoji: character.emoji,

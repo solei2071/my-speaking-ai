@@ -2,13 +2,12 @@
 	import { onDestroy } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { resolveRoute } from '$app/paths';
-	import { RealtimeAgent, RealtimeSession } from '@openai/agents-realtime';
 	import { user, authLoading, signOut, onboardingComplete, onboardingLoading } from '$lib/auth.js';
 	import { saveMessage, fetchSessions, fetchSessionMessages } from '$lib/conversation.js';
 	import { saveSentence, fetchSavedSentences, deleteSavedSentence } from '$lib/savedSentences.js';
 	import { getCharacter, voiceOptionsSorted } from '$lib/characters.js';
 	import { getScenario, scenarioOptions } from '$lib/scenarios.js';
-	import { getLevel, levelOptions } from '$lib/levels.js';
+	import { levelOptions } from '$lib/levels.js';
 	import { analyzeSpeech } from '$lib/pronunciation.js';
 	import OnboardingModal from '$lib/OnboardingModal.svelte';
 	import { checkOnboardingStatus } from '$lib/profile.js';
@@ -50,8 +49,6 @@
 
 	// AI speaking state
 	let isSpeaking = $state(false);
-	let streamingText = $state('');
-	let transcriptEventActive = false;
 
 	// Word-by-word reveal (syncs text display with speaking pace)
 	const CHAR_REVEAL_MS = 25;
@@ -84,8 +81,7 @@
 		return FILLER_PATTERNS.some((pattern) => pattern.test(trimmed));
 	}
 
-	// Cleanup tracking
-	let cleanupFns = [];
+	let speechSynthesisSupported = $state(true);
 
 	// History view
 	let historySessions = $state([]);
@@ -136,29 +132,7 @@
 			}
 			session = null;
 		}
-
-		cleanupFns.forEach((fn) => {
-			try {
-				fn();
-			} catch {
-				/* ignore */
-			}
-		});
-		cleanupFns = [];
 	});
-
-	function addCleanableListener(target, event, handler) {
-		if (target?.on) {
-			target.on(event, handler);
-			cleanupFns.push(() => {
-				try {
-					target.off?.(event, handler);
-				} catch {
-					/* ignore */
-				}
-			});
-		}
-	}
 
 	// --- Character-by-character reveal ---
 	function startReveal(text) {
@@ -214,147 +188,154 @@
 		).catch((e) => console.warn('[DB] Save failed:', e.message));
 	}
 
-	function handleServerEvent(event) {
-		if (!event?.type) return;
+	let isRequestingReply = false;
+	let activeRequestController = null;
 
-		// Response started — reset streaming state
-		if (event.type === 'response.created' || event.type === 'response.output_item.added') {
-			isSpeaking = true;
-			streamingText = '';
-			transcriptEventActive = false;
+	function buildHistoryForGemini() {
+		return conversationLog
+			.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.isStreaming)
+			.map((m) => ({
+				role: m.role,
+				text: normalizeSessionText(m.text)
+			}))
+			.filter((m) => m.text)
+			.slice(-50);
+	}
+
+	function clearActiveUtterance() {
+		if (!speechSynthesisSupported || typeof window === 'undefined') return;
+		try {
+			window.speechSynthesis.cancel();
+		} catch {
+			/* ignore */
 		}
+		isSpeaking = false;
+	}
 
-		// Audio transcript delta — accumulate text at speaking pace
-		// (only if `transcript` event hasn't already handled it)
-		if (event.type === 'response.audio_transcript.delta') {
-			const delta = event.delta || '';
-			if (delta) {
+	function speakAssistantText(text) {
+		return new Promise((resolve) => {
+			if (!speechSynthesisSupported || typeof window === 'undefined' || !text) {
+				resolve();
+				return;
+			}
+
+			clearActiveUtterance();
+
+			const utterance = new SpeechSynthesisUtterance(text);
+			utterance.lang = 'en-US';
+			utterance.rate = 1;
+			utterance.pitch = 1;
+			utterance.onstart = () => {
 				isSpeaking = true;
-				// Only accumulate here; the `transcript` listener may also fire.
-				// We guard against duplicates by letting `transcript` set the full text
-				// when available, which overwrites any partial accumulation.
-				if (!transcriptEventActive) {
-					streamingText += delta;
-					updateStreamingMessage(streamingText);
-				}
-			}
-		}
-
-		// Response done — finalize the message
-		if (event.type === 'response.audio_transcript.done') {
-			isSpeaking = false;
-			finalizeStreamingMessage();
-		}
-	}
-
-	function finalizeStreamingMessage() {
-		const lastMsg = conversationLog[conversationLog.length - 1];
-		const text = streamingText || lastMsg?.text;
-		if (lastMsg?.isStreaming && text) {
-			conversationLog = [...conversationLog.slice(0, -1), { ...lastMsg, role: 'assistant', text }];
-			saveAssistantToDb(text);
-		}
-		streamingText = '';
-	}
-
-	function getMessageText(item) {
-		if (item.type !== 'message' || !item.content) return null;
-		for (const c of item.content) {
-			if (c.type === 'input_text' && c.text) return c.text;
-			if (c.type === 'input_audio' && c.transcript) return c.transcript;
-			if (c.type === 'output_text' && c.text) return c.text;
-			if (c.type === 'output_audio' && c.transcript) return c.transcript;
-		}
-		return null;
-	}
-
-	function updateStreamingMessage(text) {
-		if (!text) return;
-
-		const lastIndex = conversationLog.length - 1;
-		const lastMsg = conversationLog[lastIndex];
-		let added = false;
-
-		if (lastMsg?.role === 'user' || (!lastMsg && conversationLog.length === 0)) {
-			conversationLog = [
-				...conversationLog,
-				nowLogMessage({ role: 'assistant', text, isStreaming: true })
-			];
-			added = true;
-		} else if (lastMsg?.isStreaming) {
-			conversationLog = [
-				...conversationLog.slice(0, -1),
-				{ ...lastMsg, role: 'assistant', text, isStreaming: true }
-			];
-		} else if (!lastMsg || lastMsg.role === 'assistant') {
-			const userCount = conversationLog.filter((m) => m.role === 'user').length;
-			const assistantCount = conversationLog.filter((m) => m.role === 'assistant').length;
-			if (userCount > assistantCount) {
-				conversationLog = [
-					...conversationLog,
-					nowLogMessage({ role: 'assistant', text, isStreaming: true })
-				];
-				added = true;
-			}
-		}
-
-		// Update reveal target (timer continues revealing words)
-		revealTargetText = text;
-		if (added || !isRevealing) startReveal(text);
-
-		requestAnimationFrame(() => {
-			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
-		});
-	}
-
-	function updateConversationLog(history) {
-		let latestCompletedText = null;
-
-		for (const item of history) {
-			if (item.type !== 'message') continue;
-			if (item.role === 'user') continue;
-			if (item.status && item.status !== 'completed') continue;
-			const text = getMessageText(item);
-			if (text?.trim()) {
-				latestCompletedText = text;
-			}
-		}
-
-		if (latestCompletedText) {
-			const lastMsg = conversationLog[conversationLog.length - 1];
-
-			if (lastMsg?.isStreaming) {
-				// Replace streaming placeholder with final text
-				conversationLog = [
-					...conversationLog.slice(0, -1),
-					{ ...lastMsg, role: 'assistant', text: latestCompletedText }
-				];
+			};
+			utterance.onend = () => {
 				isSpeaking = false;
-				saveAssistantToDb(latestCompletedText);
-				// Continue reveal if already running, otherwise start
-				revealTargetText = latestCompletedText;
-				if (!isRevealing) startReveal(latestCompletedText);
-			} else if (lastMsg?.role === 'user') {
-				conversationLog = [
-					...conversationLog,
-					nowLogMessage({ role: 'assistant', text: latestCompletedText })
-				];
-				saveAssistantToDb(latestCompletedText);
-				startReveal(latestCompletedText);
-			} else if (lastMsg?.role === 'assistant' && lastMsg.text !== latestCompletedText) {
+				resolve();
+			};
+			utterance.onerror = () => {
+				isSpeaking = false;
+				resolve();
+			};
+
+			try {
+				window.speechSynthesis.speak(utterance);
+			} catch {
+				isSpeaking = false;
+				resolve();
+			}
+		});
+	}
+
+	async function requestGeminiResponse(messageOverride) {
+		if (!session || isRequestingReply) return;
+		const currentText = normalizeSessionText(messageOverride || getLastUserText());
+		if (!currentText) return;
+
+		isRequestingReply = true;
+		isSpeaking = true;
+		status = 'connected';
+
+		const payload = {
+			character: currentVoiceId,
+			level: selectedLevel,
+			scenario: selectedScenario?.instructions || selectedScenario?.label || '',
+			messages: buildHistoryForGemini()
+		};
+
+		let controller = new AbortController();
+		activeRequestController = controller;
+
+		try {
+			const res = await withTimeout(
+				fetch('/api/gemini-chat', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(payload),
+					signal: controller.signal
+				}),
+				15000,
+				'AI response'
+			);
+			activeRequestController = null;
+
+			const data = await res.json();
+			if (!res.ok) {
+				throw new Error(data?.error || data?.message || '응답 실패');
+			}
+
+			const reply = normalizeSessionText(data?.text);
+			if (!reply) {
+				throw new Error('AI 응답이 비었습니다');
+			}
+
+			// Remove temporary states and persist assistant reply
+			isRevealing = false;
+			revealTargetText = '';
+			const last = conversationLog[conversationLog.length - 1];
+			if (last?.isStreaming) {
 				conversationLog = [
 					...conversationLog.slice(0, -1),
-					{ ...lastMsg, role: 'assistant', text: latestCompletedText }
+					nowLogMessage({ role: 'assistant', text: reply })
 				];
-				saveAssistantToDb(latestCompletedText);
-				revealTargetText = latestCompletedText;
-				if (!isRevealing) startReveal(latestCompletedText);
+			} else {
+				conversationLog = [...conversationLog, nowLogMessage({ role: 'assistant', text: reply })];
+			}
+			saveAssistantToDb(reply);
+			revealTargetText = reply;
+			startReveal(reply);
+			requestAnimationFrame(() => {
+				if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
+			});
+
+			await speakAssistantText(reply);
+		} catch (e) {
+			if (e?.name === 'AbortError') return;
+			error = e?.message || 'AI 응답 처리 중 문제가 발생했습니다.';
+			status = 'error';
+			console.error('Gemini request error:', e);
+		} finally {
+			isRequestingReply = false;
+			activeRequestController = null;
+			isSpeaking = false;
+		}
+	}
+
+	function getLastUserText() {
+		for (let i = conversationLog.length - 1; i >= 0; i--) {
+			if (conversationLog[i]?.role === 'user' && conversationLog[i]?.text?.trim()) {
+				return conversationLog[i].text.trim();
 			}
 		}
+		return '';
+	}
 
-		requestAnimationFrame(() => {
-			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
-		});
+	function closeGeminiSession() {
+		if (activeRequestController) {
+			activeRequestController.abort();
+			activeRequestController = null;
+		}
+		clearActiveUtterance();
+		isRequestingReply = false;
 	}
 
 	async function connect(voice) {
@@ -366,106 +347,38 @@
 		sessionStartedAt = Date.now();
 		sessionEndedAt = 0;
 		currentSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+		currentVoiceId = voice;
 
 		try {
-			const res = await withTimeout(
-				fetch('/api/realtime-token', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ voice, level: selectedLevel })
-				}),
-				10000,
-				'토큰 요청'
-			);
-			const data = await res.json();
-
-			if (!res.ok) {
-				let msg = data.details
-					? `${data.error || 'Failed to get token'}: ${data.details}`
-					: data.error || data.details || 'Failed to get token.';
-				if (data.hint) msg += ` ${data.hint}`;
-				throw new Error(msg);
-			}
-
-			const ephemeralKey = data.value;
-			if (!ephemeralKey) {
-				throw new Error("Couldn't get token.");
-			}
-
 			const character = getCharacter(voice);
-			const level = getLevel(selectedLevel);
-			const scenarioInstructions = selectedScenario
-				? `\n\nScenario focus: ${selectedScenario.instructions}`
-				: '';
-			const levelInstructions = `\n\n${level.instructions}`;
-			const agent = new RealtimeAgent({
-				name: character.label,
-				instructions: `You are ${character.label}, a friendly English conversation teacher. ${character.personality}${levelInstructions}${scenarioInstructions}`
-			});
+			currentCharacterName = character.label;
+			currentCharacterEmoji = character.emoji;
+			currentCharacterMbti = character.mbti ?? '';
 
-			const realtimeSession = new RealtimeSession(agent);
-
-			// Only use SDK events — no raw WebSocket hook to avoid duplicate processing
-			addCleanableListener(realtimeSession, 'history_updated', (history) =>
-				updateConversationLog(history)
-			);
-
-			addCleanableListener(realtimeSession, 'error', (e) => {
-				error = e?.error?.message ?? String(e?.error ?? e);
-				status = 'error';
-				session = null;
-				isSpeaking = false;
-			});
-
-			addCleanableListener(realtimeSession, 'audio_done', () => {
-				isSpeaking = false;
-				finalizeStreamingMessage();
-			});
-
-			addCleanableListener(realtimeSession, 'server_event', (event) => handleServerEvent(event));
-
-			addCleanableListener(realtimeSession, 'transcript', (data) => {
-				if (data?.text || data?.delta) {
-					transcriptEventActive = true;
-					isSpeaking = true;
-					if (data.text) {
-						// Full text provided — use directly (prevents duplication)
-						streamingText = data.text;
-					} else if (data.delta) {
-						streamingText += data.delta;
-					}
-					updateStreamingMessage(streamingText);
-				}
-			});
-
-			await realtimeSession.connect({ apiKey: ephemeralKey });
-
-			session = realtimeSession;
-			const char = getCharacter(voice);
-			currentCharacterName = char.label;
-			currentCharacterEmoji = char.emoji;
-			currentCharacterMbti = char.mbti ?? '';
-			currentVoiceId = voice;
-			status = 'connected';
-			mobileTab = 'chat';
-
-			// Try to initialize speech recognition, fallback to text mode if not supported
 			const speechSupported = initSpeechRecognition();
 			inputMode = speechSupported ? 'voice' : 'text';
+			speechSynthesisSupported =
+				typeof window !== 'undefined' &&
+				typeof window.speechSynthesis !== 'undefined' &&
+				typeof window.SpeechSynthesisUtterance !== 'undefined';
 
-			// For browsers without Web Speech API (e.g., Firefox), use RealtimeSession's native voice input
-			// For browsers with Web Speech API (Chrome, Edge, Safari), mute RealtimeSession and use Web Speech
-			if (realtimeSession.muted !== null) {
-				if (speechSupported) {
-					realtimeSession.mute(true); // Use Web Speech API for transcription
-				} else {
-					realtimeSession.mute(false); // Use RealtimeSession's native voice input
-					inputMode = 'voice'; // Enable voice mode even without Web Speech API
+			session = {
+				muted: !speechSupported,
+				mute: (value) => {
+					session = { ...session, muted: Boolean(value) };
+				},
+				sendMessage: async (message) => {
+					await requestGeminiResponse(message);
+				},
+				close: () => {
+					closeGeminiSession();
 				}
-			}
+			};
+			status = 'connected';
+			mobileTab = 'chat';
 		} catch (e) {
 			status = 'error';
-			const errorMsg = e?.message || '';
+			const errorMsg = e?.message || '연결에 실패했습니다. 다시 시도해주세요.';
 			if (errorMsg.includes('timed out')) {
 				error = '연결이 너무 오래 걸립니다. 인터넷 연결을 확인해주세요.';
 			} else if (errorMsg.includes('API key') || errorMsg.includes('Unauthorized')) {
@@ -473,7 +386,7 @@
 			} else if (errorMsg.includes('quota') || errorMsg.includes('limit')) {
 				error = 'API 사용량 한도를 초과했습니다. 잠시 후 다시 시도해주세요.';
 			} else {
-				error = errorMsg || '연결에 실패했습니다. 다시 시도해주세요.';
+				error = errorMsg;
 			}
 			console.error('Connection error:', e);
 		}
@@ -721,7 +634,6 @@
 		liveTranscript = '';
 		finalTranscript = '';
 		isSpeaking = false;
-		streamingText = '';
 		stopReveal();
 
 		if (session) {
@@ -749,10 +661,10 @@
 		error = null;
 	}
 
-	function safeSendMessage(msg) {
+	async function safeSendMessage(msg) {
 		if (!session) return false;
 		try {
-			session.sendMessage(msg);
+			await session.sendMessage(msg);
 			return true;
 		} catch (e) {
 			error = e?.message ?? 'Failed to send message.';
@@ -762,7 +674,7 @@
 		}
 	}
 
-	function sendText() {
+	async function sendText() {
 		const text = textInput.trim();
 		if (!text || !session) return;
 
@@ -783,19 +695,16 @@
 			).catch((e) => console.warn('[DB] Save failed:', e.message));
 		}
 
-		if (safeSendMessage(text)) textInput = '';
+		const sent = await safeSendMessage(text);
+		if (sent) textInput = '';
 	}
 
 	function setInputMode(mode) {
 		inputMode = mode;
 
 		if (mode === 'voice') {
-			// If Web Speech API is supported, use it (Chrome, Edge, Safari)
-			if (speechRecognitionSupported) {
-				if (session?.muted !== null) session.mute(true);
-			} else {
-				// If not supported (Firefox), use RealtimeSession's native voice input
-				if (session?.muted !== null) session.mute(false);
+			if (session?.muted !== null) {
+				session.mute(true);
 			}
 		} else if (mode === 'text') {
 			if (session?.muted !== null) session.mute(true);
@@ -806,17 +715,11 @@
 	}
 
 	function toggleMic() {
-		// For browsers without Web Speech API (Firefox), control RealtimeSession mute
 		if (!speechRecognitionSupported) {
-			if (session?.muted !== null) {
-				const newMutedState = !session.muted;
-				session.mute(newMutedState);
-				isListening = !newMutedState;
-			}
+			error = '음성 인식이 지원되지 않아 자동 음성 입력을 사용할 수 없습니다.';
 			return;
 		}
 
-		// For browsers with Web Speech API
 		if (isListening) {
 			stopListening();
 		} else {
@@ -828,7 +731,7 @@
 		return conversationLog.some((m) => m.role === 'user');
 	}
 
-	function sendHelperMessage(text, label) {
+	async function sendHelperMessage(text, label) {
 		if (!session) return;
 		conversationLog = [...conversationLog, nowLogMessage({ role: 'user', text: `[${label}]` })];
 		requestAnimationFrame(() => {
@@ -844,7 +747,7 @@
 				currentVoiceId
 			).catch((e) => console.warn('[DB] Save failed:', e.message));
 		}
-		safeSendMessage(text);
+		await safeSendMessage(text);
 	}
 
 	function requestGrammarCorrection() {
@@ -987,12 +890,8 @@
 	}
 
 	function startListening() {
-		// For browsers without Web Speech API (Firefox), unmute RealtimeSession
 		if (!speechRecognitionSupported) {
-			if (session?.muted !== null) {
-				session.mute(false);
-				isListening = true;
-			}
+			error = '음성 인식이 지원되지 않아 마이크 입력을 사용할 수 없습니다.';
 			return;
 		}
 
@@ -1034,15 +933,6 @@
 			autoSendTimer = null;
 		}
 
-		// For browsers without Web Speech API (Firefox), mute RealtimeSession
-		if (!speechRecognitionSupported) {
-			if (session?.muted !== null) {
-				session.mute(true);
-			}
-			return;
-		}
-
-		// For browsers with Web Speech API
 		if (recognition) {
 			try {
 				recognition.stop();
@@ -1052,7 +942,7 @@
 		}
 	}
 
-	function sendVoiceMessage() {
+	async function sendVoiceMessage() {
 		const text = liveTranscript.trim();
 		if (!text || !session) return;
 
@@ -1093,7 +983,7 @@
 			).catch((e) => console.warn('[DB] Save failed:', e.message));
 		}
 
-		safeSendMessage(text);
+		await safeSendMessage(text);
 
 		if (wasListening) {
 			setTimeout(() => startListening(), 100);

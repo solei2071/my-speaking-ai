@@ -40,11 +40,20 @@ export const fetchSessionMessagesSchema = z.object({
 	sessionId: z.string().min(1)
 });
 
-// API 스키마
-export const realtimeTokenRequestSchema = z.object({
-	voice: z.string().max(50).optional(),
+export const geminiChatRequestSchema = z.object({
 	character: z.string().max(50).optional(),
-	level: z.enum(['beginner', 'intermediate', 'advanced']).optional()
+	voice: z.string().max(50).optional(),
+	level: z.enum(['beginner', 'intermediate', 'advanced']).optional(),
+	scenario: z.string().max(200).optional(),
+	messages: z
+		.array(
+			z.object({
+				role: z.enum(['user', 'assistant']),
+				text: z.string().min(1).max(10000).trim()
+			})
+		)
+		.max(80)
+		.default([])
 });
 
 // Analytics 스키마

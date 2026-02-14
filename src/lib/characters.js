@@ -1,6 +1,6 @@
 /**
  * Voice character configurations: label, emoji, MBTI, UI styles, and AI personality.
- * 16 characters total. OpenAI has 10 voices—new chars map via `voice` field.
+ * 16 characters total. Voice IDs are mapped by character configuration `voice` field.
  */
 const MBTI_DESCRIPTIONS = {
 	ISTJ: '원칙과 책임감으로 묵묵히 일 처리하는 현실주의자',
@@ -227,7 +227,7 @@ export function getCharacter(charId) {
 	return result;
 }
 
-/** Get the OpenAI voice id for a character (for API calls). */
+/** Get the voice identifier for a character (used by API/TTS integrations). */
 export function getVoiceForCharacter(charId) {
 	const c = CHARACTERS[charId] ?? CHARACTERS.alloy;
 	return c.voice ?? charId;

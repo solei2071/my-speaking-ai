@@ -13,8 +13,13 @@
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
 		"test:unit": "vitest",
+		"test:server": "vitest --project server",
+		"test:client": "vitest --project client",
 		"test": "vitest",
-		"predeploy": "npm run format:check && npm run lint && npm run test -- --run && npm run build"
+		"predeploy": "npm run format:check && npm run lint && npm run test:server -- --run && npm run build",
+		"predeploy:full": "npm run predeploy && npm run test:client -- --run",
+		"deploy:check": "node ./scripts/deploy-check.mjs",
+		"deploy:prod": "npm run deploy:check && vercel --prod"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^2.0.1",
@@ -40,7 +45,7 @@
 		"vitest-browser-svelte": "^2.0.2"
 	},
 	"dependencies": {
-		"@openai/agents-realtime": "^0.4.5",
+		"@google/genai": "^1.16.0",
 		"@supabase/supabase-js": "^2.95.2",
 		"chart.js": "^4.5.1",
 		"claude": "^0.1.1",

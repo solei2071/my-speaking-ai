@@ -1,11 +1,10 @@
 <script>
+	import { SvelteDate } from 'svelte/reactivity';
 	let { practiceDates, currentStreak } = $props();
 
 	// Get last 90 days
-	// eslint-disable-next-line svelte/prefer-svelte-reactivity
-	const today = new Date();
-	// eslint-disable-next-line svelte/prefer-svelte-reactivity
-	const startDate = new Date(today);
+	const today = new SvelteDate();
+	const startDate = new SvelteDate(today);
 	startDate.setDate(today.getDate() - 89); // 90 days including today
 
 	// Generate calendar grid
@@ -14,8 +13,7 @@
 		const practiceSet = new Set(practiceDates);
 
 		for (let i = 0; i < 90; i++) {
-			// eslint-disable-next-line svelte/prefer-svelte-reactivity
-			const date = new Date(startDate);
+			const date = new SvelteDate(startDate);
 			date.setDate(startDate.getDate() + i);
 			const dateStr = date.toISOString().split('T')[0];
 

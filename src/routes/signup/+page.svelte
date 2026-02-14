@@ -1,6 +1,5 @@
 <script>
 	import { signUp } from '$lib/auth.js';
-	import { goto } from '$app/navigation';
 
 	let name = $state('');
 	let email = $state('');

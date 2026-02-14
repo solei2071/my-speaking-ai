@@ -35,6 +35,8 @@
 	let pronunciationHistory = $state([]);
 	let speechStartTime = $state(0);
 	let logContainer = $state(null);
+	let sessionStartedAt = $state(0);
+	let sessionEndedAt = $state(0);
 	let textInput = $state('');
 	let inputMode = $state('voice');
 	let speechRecognitionSupported = $state(true);
@@ -249,7 +251,7 @@
 		const lastMsg = conversationLog[conversationLog.length - 1];
 		const text = streamingText || lastMsg?.text;
 		if (lastMsg?.isStreaming && text) {
-			conversationLog = [...conversationLog.slice(0, -1), { role: 'assistant', text }];
+			conversationLog = [...conversationLog.slice(0, -1), { ...lastMsg, role: 'assistant', text }];
 			saveAssistantToDb(text);
 		}
 		streamingText = '';
@@ -274,18 +276,24 @@
 		let added = false;
 
 		if (lastMsg?.role === 'user' || (!lastMsg && conversationLog.length === 0)) {
-			conversationLog = [...conversationLog, { role: 'assistant', text, isStreaming: true }];
+			conversationLog = [
+				...conversationLog,
+				nowLogMessage({ role: 'assistant', text, isStreaming: true })
+			];
 			added = true;
 		} else if (lastMsg?.isStreaming) {
 			conversationLog = [
 				...conversationLog.slice(0, -1),
-				{ role: 'assistant', text, isStreaming: true }
+				{ ...lastMsg, role: 'assistant', text, isStreaming: true }
 			];
 		} else if (!lastMsg || lastMsg.role === 'assistant') {
 			const userCount = conversationLog.filter((m) => m.role === 'user').length;
 			const assistantCount = conversationLog.filter((m) => m.role === 'assistant').length;
 			if (userCount > assistantCount) {
-				conversationLog = [...conversationLog, { role: 'assistant', text, isStreaming: true }];
+				conversationLog = [
+					...conversationLog,
+					nowLogMessage({ role: 'assistant', text, isStreaming: true })
+				];
 				added = true;
 			}
 		}
@@ -319,7 +327,7 @@
 				// Replace streaming placeholder with final text
 				conversationLog = [
 					...conversationLog.slice(0, -1),
-					{ role: 'assistant', text: latestCompletedText }
+					{ ...lastMsg, role: 'assistant', text: latestCompletedText }
 				];
 				isSpeaking = false;
 				saveAssistantToDb(latestCompletedText);
@@ -327,13 +335,16 @@
 				revealTargetText = latestCompletedText;
 				if (!isRevealing) startReveal(latestCompletedText);
 			} else if (lastMsg?.role === 'user') {
-				conversationLog = [...conversationLog, { role: 'assistant', text: latestCompletedText }];
+				conversationLog = [
+					...conversationLog,
+					nowLogMessage({ role: 'assistant', text: latestCompletedText })
+				];
 				saveAssistantToDb(latestCompletedText);
 				startReveal(latestCompletedText);
 			} else if (lastMsg?.role === 'assistant' && lastMsg.text !== latestCompletedText) {
 				conversationLog = [
 					...conversationLog.slice(0, -1),
-					{ role: 'assistant', text: latestCompletedText }
+					{ ...lastMsg, role: 'assistant', text: latestCompletedText }
 				];
 				saveAssistantToDb(latestCompletedText);
 				revealTargetText = latestCompletedText;
@@ -352,6 +363,8 @@
 		conversationLog = [];
 		savedToDbSet = new SvelteSet();
 		savedMessageIds = new Set();
+		sessionStartedAt = Date.now();
+		sessionEndedAt = 0;
 		currentSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
 		try {
@@ -468,17 +481,147 @@
 
 	let disconnectMessage = $state('');
 	let sessionSummary = $state(null);
+	const SCORE_RING_RADIUS = 56;
+	const SCORE_RING_CIRCUMFERENCE = 2 * Math.PI * SCORE_RING_RADIUS;
+	const TARGET_WPM = 130;
+	const MIN_ENGAGEMENT_RATIO = 0.5;
+	const MAX_ENGAGEMENT_RATIO = 1.35;
+
+	function nowLogMessage(entry) {
+		return {
+			createdAt: Date.now(),
+			...entry
+		};
+	}
+
+	function normalizeSessionText(text) {
+		return (text || '').trim();
+	}
+
+	function formatSessionDuration(seconds) {
+		const mins = Math.floor(seconds / 60);
+		const secs = Math.floor(seconds % 60);
+		return `${mins}분 ${String(secs).padStart(2, '0')}초`;
+	}
+
+	function normalize01(value, min, max) {
+		if (!Number.isFinite(value)) return 0;
+		return Math.max(0, Math.min(1, (value - min) / (max - min)));
+	}
+
+	function scoreFromSpeed(avgWordsPerMinute) {
+		if (!Number.isFinite(avgWordsPerMinute) || avgWordsPerMinute <= 0) return 65;
+		const ratio = avgWordsPerMinute / TARGET_WPM;
+		const idealRangeScore = 100 - Math.abs(1 - ratio) * 100;
+		return Math.round(Math.max(25, Math.min(100, idealRangeScore)));
+	}
+
+	function scoreFromRatio(count, base) {
+		if (base <= 0) {
+			return count <= 0 ? 20 : 45;
+		}
+		const ratio = count / base;
+		let score = ratio >= MAX_ENGAGEMENT_RATIO ? 0 : Math.round(100 - (ratio - 1) * 45);
+		if (ratio <= MIN_ENGAGEMENT_RATIO) {
+			score = Math.round(100 * normalize01(ratio, 0, MIN_ENGAGEMENT_RATIO));
+		}
+		return Math.max(0, Math.min(100, score));
+	}
+
+	function scoreBand(score) {
+		if (score >= 90) {
+			return {
+				label: 'Excellent',
+				level: 'excellent',
+				gradient: 'from-emerald-300 via-emerald-400 to-emerald-500'
+			};
+		}
+		if (score >= 75) {
+			return {
+				label: 'Great',
+				level: 'great',
+				gradient: 'from-sky-300 via-cyan-400 to-blue-500'
+			};
+		}
+		if (score >= 60) {
+			return {
+				label: 'Good',
+				level: 'good',
+				gradient: 'from-amber-300 via-yellow-400 to-orange-500'
+			};
+		}
+		return {
+			label: 'Focus',
+			level: 'focus',
+			gradient: 'from-rose-300 via-red-400 to-pink-500'
+		};
+	}
+
+	function getScoreSummaryInsights({
+		questionCount,
+		answerCount,
+		avgWordsPerMinute,
+		avgClarity,
+		interactionScore
+	}) {
+		const strengths = [];
+		const improvements = [];
+
+		if (questionCount >= 1 && answerCount >= questionCount) {
+			strengths.push('대화 흐름이 안정적입니다. 질문에 꾸준히 답했고요.');
+		}
+		if (avgClarity >= 85) {
+			strengths.push('발음 명확도가 높아 AI가 잘 이해한 구간이 많았습니다.');
+		}
+		if (avgWordsPerMinute >= 90 && avgWordsPerMinute <= 150) {
+			strengths.push('발화 속도가 자연스러워요. 과도하게 빠르거나 느리지 않습니다.');
+		}
+
+		if (questionCount === 0) {
+			improvements.push('AI의 질문이 오지 않았더라도 직접 질문을 1~2개 던져보세요.');
+		}
+		if (avgWordsPerMinute < 70) {
+			improvements.push('발화 속도가 느린 편이라 표현이 짧게 끊겨 들릴 수 있어요.');
+		}
+		if (avgWordsPerMinute > 170) {
+			improvements.push('호흡을 조금 늦춰 말하면 더 또렷하게 전달돼요.');
+		}
+		if (interactionScore <= 65) {
+			improvements.push('문장 하나당 더 완결된 답변으로 응답해보면 점수가 더 좋아집니다.');
+		}
+		if (avgClarity < 70) {
+			improvements.push('발음/명확도 피드백을 보고 약한 발음부터 개선해보세요.');
+		}
+
+		return {
+			strengths,
+			improvements
+		};
+	}
 
 	function buildSessionSummary() {
-		if (conversationLog.length === 0) return null;
-
 		const userMsgs = conversationLog.filter((m) => m.role === 'user');
 		const aiMsgs = conversationLog.filter((m) => m.role === 'assistant');
 		const totalMessages = conversationLog.length;
 		const userWordCount = userMsgs.reduce(
-			(sum, m) => sum + (m.text?.split(/\s+/).filter(Boolean).length || 0),
+			(sum, m) => sum + (normalizeSessionText(m.text).split(/\s+/).filter(Boolean).length || 0),
 			0
 		);
+
+		const questionCount = aiMsgs.reduce(
+			(sum, msg) => sum + ((msg.text || '').match(/\?/g)?.length || 0),
+			0
+		);
+		const answerCount = userMsgs.length;
+		const durationMs = Math.max(
+			1,
+			(sessionEndedAt || Date.now()) - (sessionStartedAt || Date.now())
+		);
+		const durationSeconds = Math.max(1, Math.round(durationMs / 1000));
+		const avgWordsPerMinute = Math.round((userWordCount / durationMs) * 60000);
+		const speedScore = scoreFromSpeed(avgWordsPerMinute);
+
+		const interactionScore = scoreFromRatio(answerCount, questionCount);
 
 		// Extract useful expressions from AI messages (sentences with quotes or "could also say")
 		const expressions = [];
@@ -509,15 +652,51 @@
 		const avgClarity =
 			pronScores.length > 0
 				? Math.round(pronScores.reduce((a, b) => a + b, 0) / pronScores.length)
-				: null;
+				: 75;
+		const clarityScore = pronScores.length > 0 ? avgClarity : 75;
+		const { strengths, improvements } = getScoreSummaryInsights({
+			questionCount,
+			answerCount,
+			avgWordsPerMinute,
+			avgClarity: clarityScore,
+			interactionScore
+		});
+
+		const scoreItems = [
+			totalMessages ? clarityScore : 0,
+			totalMessages ? speedScore : 45,
+			totalMessages ? interactionScore : 30,
+			totalMessages
+				? questionCount > 0
+					? Math.min(100, Math.round((answerCount / questionCount) * 100))
+					: 90
+				: 0
+		];
+		const overallScore = Math.max(
+			0,
+			Math.round(scoreItems.reduce((a, b) => a + b, 0) / scoreItems.length)
+		);
+		const scoreMeta = scoreBand(overallScore);
+		const scoreStrokeOffset = SCORE_RING_CIRCUMFERENCE * (1 - overallScore / 100);
 
 		return {
 			totalMessages,
 			userMessages: userMsgs.length,
 			aiMessages: aiMsgs.length,
 			userWordCount,
+			questionCount,
+			answerCount,
+			durationSeconds,
+			avgWordsPerMinute,
+			overallScore,
+			speedScore,
+			interactionScore,
+			clarityScore,
+			scoreMeta,
+			scoreStrokeOffset,
+			strengths,
+			improvements,
 			expressions: uniqueExpressions,
-			avgClarity,
 			character: currentCharacterName,
 			characterEmoji: currentCharacterEmoji,
 			characterMbti: currentCharacterMbti,
@@ -533,6 +712,8 @@
 			clearTimeout(autoSendTimer);
 			autoSendTimer = null;
 		}
+
+		sessionEndedAt = Date.now();
 
 		// Build summary before clearing state
 		sessionSummary = buildSessionSummary();
@@ -562,6 +743,8 @@
 	function dismissSummary() {
 		sessionSummary = null;
 		status = 'idle';
+		sessionStartedAt = 0;
+		sessionEndedAt = 0;
 		disconnectMessage = '';
 		error = null;
 	}
@@ -584,7 +767,7 @@
 		if (!text || !session) return;
 
 		stopReveal();
-		conversationLog = [...conversationLog, { role: 'user', text }];
+		conversationLog = [...conversationLog, nowLogMessage({ role: 'user', text })];
 		requestAnimationFrame(() => {
 			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
 		});
@@ -647,7 +830,7 @@
 
 	function sendHelperMessage(text, label) {
 		if (!session) return;
-		conversationLog = [...conversationLog, { role: 'user', text: `[${label}]` }];
+		conversationLog = [...conversationLog, nowLogMessage({ role: 'user', text: `[${label}]` })];
 		requestAnimationFrame(() => {
 			if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
 		});
@@ -888,7 +1071,7 @@
 		finalTranscript = '';
 
 		// Include pronunciation data in message
-		const messageData = { role: 'user', text };
+		const messageData = nowLogMessage({ role: 'user', text });
 		if (pronunciationEnabled && currentPronunciation) {
 			messageData.pronunciation = currentPronunciation;
 			pronunciationHistory = [...pronunciationHistory, currentPronunciation];
@@ -1050,7 +1233,7 @@
 	}
 </script>
 
-<div class="h-screen overflow-hidden bg-stone-50 flex flex-col lg:flex-row">
+<div class="app-shell h-screen overflow-hidden flex flex-col lg:flex-row">
 	<!-- Mobile Tab Bar (visible only on small screens) -->
 	{#if status === 'connected'}
 		<div class="flex lg:hidden border-b border-stone-200 bg-white shrink-0">
@@ -1082,9 +1265,9 @@
 
 	<!-- Left: Controls + Input -->
 	<aside
-		class="h-full flex flex-col bg-white border-r border-stone-200 p-6 sm:p-10 lg:p-12 overflow-y-auto shrink-0
-			lg:w-[520px] lg:block
-			{status === 'connected' && mobileTab !== 'controls' ? 'hidden lg:flex' : 'flex-1 lg:flex-none'}"
+		class="h-full flex flex-col bg-white border-r border-stone-200 p-6 sm:p-10 lg:p-12 overflow-y-auto shrink-0 market-panel market-enter
+				lg:w-[520px] lg:block
+				{status === 'connected' && mobileTab !== 'controls' ? 'hidden lg:flex' : 'flex-1 lg:flex-none'}"
 	>
 		<div class="flex-1">
 			<!-- User Auth Section -->
@@ -1320,108 +1503,35 @@
 					<p class="text-stone-500 text-sm">Connecting...</p>
 				</div>
 			{:else if status === 'disconnected'}
-				{#if sessionSummary}
-					<div class="space-y-4">
-						<!-- Summary Header -->
-						<div
-							class="flex items-center gap-3 p-4 bg-emerald-50 rounded-xl border border-emerald-100"
+				<div class="flex flex-col items-center gap-4 py-12">
+					<div class="w-14 h-14 rounded-full bg-stone-100 flex items-center justify-center">
+						<svg
+							class="w-8 h-8 text-stone-600"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
 						>
-							<div
-								class="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center text-xl"
-							>
-								{sessionSummary.characterEmoji || '✅'}
-							</div>
-							<div>
-								<p class="text-emerald-800 font-semibold text-sm">Session Complete!</p>
-								<p class="text-emerald-600 text-xs">
-									{sessionSummary.character}{sessionSummary.characterMbti
-										? ` (${sessionSummary.characterMbti})`
-										: ''}
-								</p>
-							</div>
-						</div>
-
-						<!-- Stats Grid -->
-						<div class="grid grid-cols-3 gap-3">
-							<div class="p-3 bg-stone-50 rounded-xl text-center border border-stone-100">
-								<p class="text-lg font-bold text-stone-800">{sessionSummary.totalMessages}</p>
-								<p class="text-[10px] text-stone-500">Messages</p>
-							</div>
-							<div class="p-3 bg-stone-50 rounded-xl text-center border border-stone-100">
-								<p class="text-lg font-bold text-stone-800">{sessionSummary.userWordCount}</p>
-								<p class="text-[10px] text-stone-500">Words spoken</p>
-							</div>
-							<div class="p-3 bg-stone-50 rounded-xl text-center border border-stone-100">
-								{#if sessionSummary.avgClarity}
-									<p
-										class="text-lg font-bold {sessionSummary.avgClarity >= 80
-											? 'text-emerald-600'
-											: sessionSummary.avgClarity >= 60
-												? 'text-amber-600'
-												: 'text-rose-600'}"
-									>
-										{sessionSummary.avgClarity}%
-									</p>
-									<p class="text-[10px] text-stone-500">Clarity</p>
-								{:else}
-									<p class="text-lg font-bold text-stone-800">{sessionSummary.userMessages}</p>
-									<p class="text-[10px] text-stone-500">Your turns</p>
-								{/if}
-							</div>
-						</div>
-
-						<!-- Learned Expressions -->
-						{#if sessionSummary.expressions.length > 0}
-							<div class="p-4 bg-amber-50 rounded-xl border border-amber-100">
-								<p class="text-amber-800 font-medium text-xs mb-2">Expressions from this session</p>
-								<ul class="space-y-1.5">
-									{#each sessionSummary.expressions as expr, i (i)}
-										<li class="text-amber-900 text-sm flex items-start gap-2">
-											<span class="text-amber-500 mt-0.5 shrink-0">•</span>
-											<span class="italic">"{expr}"</span>
-										</li>
-									{/each}
-								</ul>
-							</div>
-						{/if}
-
-						<!-- Action Buttons -->
-						<button
-							onclick={dismissSummary}
-							class="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-medium text-sm transition-colors"
-						>
-							Practice again
-						</button>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M5 13l4 4L19 7"
+							/>
+						</svg>
 					</div>
-				{:else}
-					<div class="flex flex-col items-center gap-4 py-12">
-						<div class="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
-							<svg
-								class="w-8 h-8 text-emerald-600"
-								fill="none"
-								stroke="currentColor"
-								viewBox="0 0 24 24"
-							>
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M5 13l4 4L19 7"
-								/>
-							</svg>
-						</div>
-						<div class="text-center">
-							<p class="text-emerald-700 font-medium text-sm">Disconnected</p>
-							<p class="text-stone-500 text-xs mt-1">{disconnectMessage}</p>
-						</div>
-						<button
-							onclick={dismissSummary}
-							class="px-6 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-600 text-sm font-medium transition-colors"
-						>
-							Back to home
-						</button>
+					<div class="text-center">
+						<p class="text-stone-700 font-medium text-sm">
+							{sessionSummary ? '세션이 종료되어 요약이 준비되었습니다.' : 'Disconnected'}
+						</p>
+						<p class="text-stone-500 text-xs mt-1">{disconnectMessage}</p>
 					</div>
-				{/if}
+					<button
+						onclick={dismissSummary}
+						class="px-6 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-600 text-sm font-medium transition-colors"
+					>
+						Back to home
+					</button>
+				</div>
 			{:else if status === 'error'}
 				<div class="space-y-4">
 					<p class="text-stone-600 text-sm mb-3">
@@ -1692,6 +1802,7 @@
 									<label class="flex items-center gap-2 cursor-pointer select-none">
 										<button
 											onclick={toggleAutoSend}
+											aria-label="자동 전송 토글"
 											class="relative w-10 h-5 rounded-full transition-colors duration-200 {autoSendEnabled
 												? 'bg-emerald-500'
 												: 'bg-stone-300'}"
@@ -1822,13 +1933,13 @@
 
 	<!-- Right: Conversation or History -->
 	<main
-		class="flex-1 flex flex-col min-h-0 overflow-hidden
-		{status === 'connected' && mobileTab !== 'chat' ? 'hidden lg:flex' : ''}"
+		class="flex-1 flex flex-col min-h-0 overflow-hidden market-main
+			{status === 'connected' && mobileTab !== 'chat' ? 'hidden lg:flex' : ''}"
 	>
 		<div class="flex-1 flex flex-col min-h-0 p-8 lg:p-12">
 			{#if savedView}
 				<div
-					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden"
+					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden market-card"
 				>
 					<div class="shrink-0 px-8 py-5 border-b border-stone-100 bg-stone-50/50">
 						<h2 class="text-base font-semibold text-stone-700">Saved Sentences</h2>
@@ -1891,7 +2002,7 @@
 				</div>
 			{:else if historyView === 'list'}
 				<div
-					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden"
+					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden market-card"
 				>
 					<div class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50">
 						<h2 class="text-base font-semibold text-stone-700">Past Conversations</h2>
@@ -1965,7 +2076,7 @@
 							mbtiDescription: ''
 						}}
 				<div
-					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden"
+					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden market-card"
 				>
 					<div
 						class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex flex-col gap-1"
@@ -2031,7 +2142,7 @@
 				</div>
 			{:else}
 				<div
-					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden"
+					class="flex-1 flex flex-col min-h-0 rounded-2xl bg-white border border-stone-200 shadow-sm overflow-hidden market-card"
 				>
 					<div
 						class="shrink-0 px-6 py-4 border-b border-stone-100 bg-stone-50/50 flex items-center justify-between gap-4 flex-wrap"
@@ -2243,10 +2354,237 @@
 	</main>
 </div>
 
+{#if sessionSummary}
+	<div
+		class="fixed inset-0 z-60 flex items-center justify-center bg-slate-900/45 backdrop-blur-md p-4"
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="session-summary-title"
+	>
+		<div
+			class="w-full max-w-2xl market-card market-enter border border-stone-200/80 relative overflow-hidden"
+		>
+			<div
+				class="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-emerald-400 via-sky-400 to-indigo-400"
+			></div>
+			<div class="relative px-6 py-6 md:px-7 md:py-7">
+				<div class="flex flex-col lg:flex-row lg:items-center gap-5">
+					<div class="flex-1">
+						<p class="market-chip mb-2.5">Session Completed</p>
+						<h2
+							id="session-summary-title"
+							class="text-2xl market-shell-title text-stone-900 mb-1.5"
+						>
+							최종 세션 리포트
+						</h2>
+						<p class="text-stone-600 text-sm">
+							{sessionSummary.characterEmoji || '✅'}
+							{sessionSummary.character}{sessionSummary.characterMbti
+								? ` (${sessionSummary.characterMbti})`
+								: ''}
+							와의 대화 결과입니다.
+						</p>
+						<p class="text-stone-400 text-xs mt-2">
+							지속 시간: {formatSessionDuration(sessionSummary.durationSeconds)} · 레벨: {sessionSummary.level}
+						</p>
+
+						<div class="mt-5 flex flex-wrap gap-2">
+							<span
+								class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-emerald-100 bg-emerald-50"
+							>
+								<span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+								상호작용 점수 {sessionSummary.interactionScore}
+							</span>
+							<span
+								class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border"
+							>
+								<span class="w-2 h-2 rounded-full bg-sky-500"></span>
+								속도 점수 {sessionSummary.speedScore}
+							</span>
+							<span
+								class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border"
+							>
+								<span class="w-2 h-2 rounded-full bg-amber-500"></span>
+								명확도 {sessionSummary.clarityScore}
+							</span>
+						</div>
+					</div>
+
+					<div class="shrink-0">
+						<div class="relative w-28 h-28 rounded-full">
+							<svg
+								class="w-full h-full"
+								viewBox="0 0 132 132"
+								role="img"
+								aria-label="Session score"
+							>
+								<circle
+									cx="66"
+									cy="66"
+									r={SCORE_RING_RADIUS}
+									fill="none"
+									stroke="rgba(15,23,42,0.12)"
+									stroke-width="10"
+									stroke-linecap="round"
+								></circle>
+								<circle
+									cx="66"
+									cy="66"
+									r={SCORE_RING_RADIUS}
+									fill="none"
+									stroke-width="10"
+									stroke-linecap="round"
+									stroke="url(#summaryRingGradient)"
+									class="session-ring-progress"
+									style={`stroke-dasharray: ${SCORE_RING_CIRCUMFERENCE}; stroke-dashoffset: ${sessionSummary.scoreStrokeOffset};`}
+									stroke-dashoffset="0"
+									transform="rotate(-90 66 66)"
+								></circle>
+								<defs>
+									<linearGradient id="summaryRingGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+										<stop offset="0%" stop-color="#34d399" />
+										<stop offset="50%" stop-color="#0ea5e9" />
+										<stop offset="100%" stop-color="#6366f1" />
+									</linearGradient>
+								</defs>
+							</svg>
+							<div
+								class="absolute inset-0 grid place-items-center rounded-full bg-white/70 backdrop-blur-sm"
+							>
+								<div class="text-center">
+									<div class="text-3xl font-black tracking-tight text-stone-900">
+										{sessionSummary.overallScore}
+									</div>
+									<div class="text-[11px] text-stone-500">종합점수</div>
+								</div>
+							</div>
+						</div>
+						<p class="text-center mt-2 text-xs font-semibold tracking-wide">
+							<span class="market-chip">{sessionSummary.scoreMeta.label}</span>
+						</p>
+					</div>
+				</div>
+
+				<div class="mt-6 grid grid-cols-2 md:grid-cols-4 gap-2.5">
+					<div class="market-surface rounded-xl p-3.5 border">
+						<p class="text-stone-500 text-[11px]">총 메시지</p>
+						<p class="text-2xl font-black text-stone-900">{sessionSummary.totalMessages}</p>
+						<p class="text-[11px] text-stone-400 mt-0.5">Messages</p>
+					</div>
+					<div class="market-surface rounded-xl p-3.5 border">
+						<p class="text-stone-500 text-[11px]">질문 수</p>
+						<p class="text-2xl font-black text-stone-900">{sessionSummary.questionCount}</p>
+						<p class="text-[11px] text-stone-400 mt-0.5">Questions</p>
+					</div>
+					<div class="market-surface rounded-xl p-3.5 border">
+						<p class="text-stone-500 text-[11px]">답변 수</p>
+						<p class="text-2xl font-black text-stone-900">{sessionSummary.answerCount}</p>
+						<p class="text-[11px] text-stone-400 mt-0.5">Answers</p>
+					</div>
+					<div class="market-surface rounded-xl p-3.5 border">
+						<p class="text-stone-500 text-[11px]">발화 단어</p>
+						<p class="text-2xl font-black text-stone-900">{sessionSummary.userWordCount}</p>
+						<p class="text-[11px] text-stone-400 mt-0.5">Words</p>
+					</div>
+					<div class="market-surface rounded-xl p-3.5 border">
+						<p class="text-stone-500 text-[11px]">대화 속도</p>
+						<p class="text-2xl font-black text-stone-900">{sessionSummary.avgWordsPerMinute} WPM</p>
+						<p class="text-[11px] text-stone-400 mt-0.5">목표 ±30WPM</p>
+					</div>
+					<div class="market-surface rounded-xl p-3.5 border">
+						<p class="text-stone-500 text-[11px]">명확도</p>
+						<p
+							class="text-2xl font-black {sessionSummary.clarityScore >= 80
+								? 'text-emerald-700'
+								: sessionSummary.clarityScore >= 60
+									? 'text-amber-700'
+									: 'text-rose-700'}"
+						>
+							{sessionSummary.clarityScore}
+							<span class="text-xl font-semibold">%</span>
+						</p>
+						<p class="text-[11px] text-stone-400 mt-0.5">Accuracy</p>
+					</div>
+					<div class="market-surface rounded-xl p-3.5 border">
+						<p class="text-stone-500 text-[11px]">상호작용 점수</p>
+						<p class="text-2xl font-black text-stone-900">{sessionSummary.interactionScore}</p>
+						<p class="text-[11px] text-stone-400 mt-0.5">Questions/Answers balance</p>
+					</div>
+					<div class="market-surface rounded-xl p-3.5 border">
+						<p class="text-stone-500 text-[11px]">속도 점수</p>
+						<p class="text-2xl font-black text-stone-900">{sessionSummary.speedScore}</p>
+						<p class="text-[11px] text-stone-400 mt-0.5">speech pace fit</p>
+					</div>
+				</div>
+
+				{#if sessionSummary.strengths.length > 0 || sessionSummary.improvements.length > 0}
+					<div class="mt-5 grid sm:grid-cols-2 gap-2.5">
+						{#if sessionSummary.strengths.length > 0}
+							<div class="rounded-xl border border-emerald-100 bg-emerald-50/70 p-4">
+								<div class="text-sm font-semibold text-emerald-900 mb-2">Strong Points</div>
+								<ul class="space-y-1.5">
+									{#each sessionSummary.strengths as strength, idx (idx)}
+										<li class="text-emerald-900 text-sm flex items-start gap-2">
+											<span class="text-emerald-500 mt-0.5 shrink-0">✓</span>
+											<span>{strength}</span>
+										</li>
+									{/each}
+								</ul>
+							</div>
+						{/if}
+						{#if sessionSummary.improvements.length > 0}
+							<div class="rounded-xl border border-rose-100 bg-rose-50/70 p-4">
+								<div class="text-sm font-semibold text-rose-900 mb-2">Next Focus</div>
+								<ul class="space-y-1.5">
+									{#each sessionSummary.improvements as improvement, idx (idx)}
+										<li class="text-rose-900 text-sm flex items-start gap-2">
+											<span class="text-rose-500 mt-0.5 shrink-0">•</span>
+											<span>{improvement}</span>
+										</li>
+									{/each}
+								</ul>
+							</div>
+						{/if}
+					</div>
+				{/if}
+
+				{#if sessionSummary.expressions.length > 0}
+					<div class="mt-5 p-4 rounded-xl border border-stone-200 bg-stone-50/80">
+						<div class="text-sm font-medium text-stone-900 mb-2">Expressions</div>
+						<ul class="space-y-1.5">
+							{#each sessionSummary.expressions as expr, idx (idx)}
+								<li class="text-stone-800 text-sm flex items-start gap-2">
+									<span class="text-stone-400 mt-0.5 shrink-0">•</span>
+									<span class="italic">"{expr}"</span>
+								</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
+			</div>
+
+			<div class="px-6 py-4 md:px-7 md:py-4 border-t border-stone-100 bg-stone-50/80 flex gap-2">
+				<button
+					onclick={dismissSummary}
+					class="flex-1 py-3 rounded-xl bg-stone-900 text-white font-semibold text-sm transition-colors hover:bg-stone-700"
+				>
+					다시 시작
+				</button>
+				<button
+					onclick={dismissSummary}
+					class="flex-1 py-3 rounded-xl bg-white border border-stone-200 text-stone-600 font-semibold text-sm transition-colors hover:bg-stone-50"
+				>
+					대화로 돌아가기
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
 <!-- Toast notification for saved sentence -->
 {#if savedToast}
 	<div
-		class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 bg-stone-800 text-white text-sm font-medium rounded-xl shadow-lg"
+		class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 text-sm font-medium rounded-xl shadow-lg market-toast"
 	>
 		Sentence saved!
 	</div>
@@ -2291,5 +2629,9 @@
 		margin-left: 1px;
 		vertical-align: text-bottom;
 		animation: blink 0.8s step-end infinite;
+	}
+
+	.session-ring-progress {
+		transition: stroke-dashoffset 900ms cubic-bezier(0.22, 1, 0.36, 1);
 	}
 </style>

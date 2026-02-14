@@ -1,6 +1,8 @@
 <script>
 	import { onMount } from 'svelte';
 
+	let { children } = $props();
+
 	let hasError = $state(false);
 	let errorMessage = $state('');
 	let errorStack = $state('');
@@ -75,4 +77,4 @@
 	</div>
 {/if}
 
-<slot />
+{@render children()}

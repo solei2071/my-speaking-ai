@@ -2,7 +2,9 @@
 	let { title, value, subtitle, icon } = $props();
 </script>
 
-<div class="bg-white rounded-xl shadow-sm border border-stone-200 p-6 hover:shadow-md transition-shadow">
+<div
+	class="bg-white rounded-xl shadow-sm border border-stone-200 p-6 hover:shadow-md transition-shadow"
+>
 	<div class="flex items-start justify-between">
 		<div class="flex-1">
 			<p class="text-sm font-medium text-stone-600 mb-1">{title}</p>

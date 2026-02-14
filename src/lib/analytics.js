@@ -63,8 +63,7 @@ export async function calculateSpeakingTime(userId, period = 'all') {
 
 		// Only count time for user messages (when user is speaking)
 		if (current.role === 'user') {
-			const gap =
-				(new Date(current.created_at) - new Date(previous.created_at)) / 1000;
+			const gap = (new Date(current.created_at) - new Date(previous.created_at)) / 1000;
 
 			// Cap gap at 5 minutes (300s), minimum 10 seconds
 			const validGap = Math.max(10, Math.min(gap, 300));
@@ -154,9 +153,7 @@ export async function calculateStreaks(userId) {
 
 	// Get unique dates (YYYY-MM-DD format)
 	const uniqueDates = [
-		...new Set(
-			messages.map((m) => new Date(m.created_at).toISOString().split('T')[0])
-		)
+		...new Set(messages.map((m) => new Date(m.created_at).toISOString().split('T')[0]))
 	].sort();
 
 	const practiceDates = uniqueDates;
@@ -167,8 +164,7 @@ export async function calculateStreaks(userId) {
 
 	for (let i = 1; i < uniqueDates.length; i++) {
 		const dayDiff =
-			(new Date(uniqueDates[i]) - new Date(uniqueDates[i - 1])) /
-			(1000 * 60 * 60 * 24);
+			(new Date(uniqueDates[i]) - new Date(uniqueDates[i - 1])) / (1000 * 60 * 60 * 24);
 
 		if (dayDiff === 1) {
 			tempStreak++;
@@ -190,8 +186,7 @@ export async function calculateStreaks(userId) {
 		currentStreak = 1;
 		for (let i = uniqueDates.length - 2; i >= 0; i--) {
 			const dayDiff =
-				(new Date(uniqueDates[i + 1]) - new Date(uniqueDates[i])) /
-				(1000 * 60 * 60 * 24);
+				(new Date(uniqueDates[i + 1]) - new Date(uniqueDates[i])) / (1000 * 60 * 60 * 24);
 			if (dayDiff === 1) {
 				currentStreak++;
 			} else {
@@ -256,8 +251,7 @@ export async function getSessionStats(userId) {
 
 		// Track character usage
 		if (msg.character_name) {
-			characterCount[msg.character_name] =
-				(characterCount[msg.character_name] || 0) + 1;
+			characterCount[msg.character_name] = (characterCount[msg.character_name] || 0) + 1;
 		}
 	});
 
